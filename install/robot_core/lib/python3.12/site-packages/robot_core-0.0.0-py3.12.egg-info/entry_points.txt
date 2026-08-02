@@ -1,0 +1,5 @@
+[console_scripts]
+move_node = robot_core.move_node:main
+server_node = robot_core.server_node:main
+servo_node = robot_core.servo_node:main
+ultrasonic_node = robot_core.ultrasonic_node:main
