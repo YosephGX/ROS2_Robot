@@ -9,7 +9,7 @@ import uvicorn
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Int32MultiArray, Bool
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -28,6 +28,7 @@ class WebBridgeNode(Node):
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.arm_pub = self.create_publisher(Int32MultiArray, '/arm_cmds', 10)
         self.head_pub = self.create_publisher(Int32MultiArray, '/head_cmds', 10)
+        self.claw_pub = self.create_publisher(Bool, '/claw_cmd', 10)
         
         # Estado actual de servos para enviar en bloque
         self.head_angles = [90, 90]        # [Pan, Tilt]
@@ -46,11 +47,16 @@ class WebBridgeNode(Node):
         msg.data = self.head_angles
         self.head_pub.publish(msg)
         
-    def publish_arm(self, hombro: int, mano: int, garra: int):
-        self.arm_angles = [hombro, mano, garra]
+    def publish_arm(self, hombro: int, mano: int):
+        self.arm_angles = [hombro, mano]
         msg = Int32MultiArray()
         msg.data = self.arm_angles
         self.arm_pub.publish(msg)
+        
+    def publish_claw(self, close: bool):
+        msg = Bool()
+        msg.data = close
+        self.claw_pub.publish(msg)
 
 # -- INTERFAZ GRÁFICA (HTML + CSS + JS) --
 HTML_CONTENT = """
@@ -123,14 +129,16 @@ HTML_CONTENT = """
             </div>
             <div class="slider-group">
                 <label><span>Brazo - Garra</span><span id="val-garra">90°</span></label>
-                <input type="range" id="garra" min="0" max="180" value="90" oninput="updateServos()">
+                <button class="btn" id="clawBtn" onclick="toggleClaw()">Garra: Abierta</button>
             </div>
         </div>
     </div>
 
     <script>
-        const wsUrl = `ws://${window.location.host}/ws/control`;
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws/control`;
         let ws;
+        let clawClosed = false;
 
         function connect() {
             ws = new WebSocket(wsUrl);
@@ -152,22 +160,26 @@ HTML_CONTENT = """
                 ws.send(JSON.stringify({ action, value }));
             }
         }
+        
+        function toggleClaw() {
+            clawClosed = !clawClosed;
+            sendCmd('claw', clawClosed);
+            document.getElementById('clawBtn').textContent = clawClosed ? 'Garra: Cerrada' : 'Garra: Abierta';
+        }
 
         function updateServos() {
             const pan = parseInt(document.getElementById('pan').value);
             const tilt = parseInt(document.getElementById('tilt').value);
             const hombro = parseInt(document.getElementById('hombro').value);
             const mano = parseInt(document.getElementById('mano').value);
-            const garra = parseInt(document.getElementById('garra').value);
 
             document.getElementById('val-pan').textContent = pan + '°';
             document.getElementById('val-tilt').textContent = tilt + '°';
             document.getElementById('val-hombro').textContent = hombro + '°';
             document.getElementById('val-mano').textContent = mano + '°';
-            document.getElementById('val-garra').textContent = garra + '°';
 
             sendCmd('head', [pan, tilt]);
-            sendCmd('arm', [hombro, mano, garra]);
+            sendCmd('arm', [hombro, mano]);
         }
 
         // Control por teclado
@@ -227,8 +239,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     ros_node.publish_twist(0.0, 0.0)
             elif cmd.action == "head" and isinstance(cmd.value, list) and len(cmd.value) == 2:
                 ros_node.publish_head(int(cmd.value[0]), int(cmd.value[1]))
-            elif cmd.action == "arm" and isinstance(cmd.value, list) and len(cmd.value) == 3:
-                ros_node.publish_arm(int(cmd.value[0]), int(cmd.value[1]), int(cmd.value[2]))            
+            elif cmd.action == "arm" and isinstance(cmd.value, list) and len(cmd.value) == 2:
+                ros_node.publish_arm(int(cmd.value[0]), int(cmd.value[1]))
+            elif cmd.action == "claw" and isinstance(cmd.value, bool):
+                ros_node.publish_claw(cmd.value)
     except WebSocketDisconnect:
         if ros_node:
             ros_node.publish_twist(0.0, 0.0)  # Freno de seguridad por desconexión
@@ -243,13 +257,14 @@ def main(args=None):
     ros_thread.start()
 
     try:
-        # Escucha en 0.0.0.0 puerto 8000 para acceso desde red local
-        uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+        # Escucha en 0.0.0.0 puerto 5000 para acceso desde red local
+        uvicorn.run(app, host="0.0.0.0", port=5000, log_level="info", proxy_headers=True, forwarded_allow_ips="*")
     except KeyboardInterrupt:
         pass
     finally:
         ros_node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

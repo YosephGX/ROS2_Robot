@@ -250,6 +250,7 @@ def main(args=None):
     try:
         # spin() mantiene el nodo ejecutándose y escuchando el tópico
         move_node.setup_hardware()
+        move_node.stop()
         rclpy.spin(move_node)
     except KeyboardInterrupt:
         pass
@@ -258,7 +259,8 @@ def main(args=None):
         move_node.stop()
         GPIO.cleanup()
         move_node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

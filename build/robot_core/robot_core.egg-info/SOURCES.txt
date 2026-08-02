@@ -8,7 +8,7 @@ setup.py
 ../../build/robot_core/robot_core.egg-info/requires.txt
 ../../build/robot_core/robot_core.egg-info/top_level.txt
 ../../build/robot_core/robot_core.egg-info/zip-safe
-launch/launch.py
+launch/robot_launch.py
 resource/robot_core
 robot_core/__init__.py
 robot_core/move_node.py

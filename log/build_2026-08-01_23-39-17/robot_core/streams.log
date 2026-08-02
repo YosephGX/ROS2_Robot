@@ -1,0 +1,33 @@
+[1.604s] Invoking command in '/home/luna/Desktop/robot_ws/src/robot_core': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/luna/Desktop/robot_ws/build/robot_core/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/robot_core build --build-base /home/luna/Desktop/robot_ws/build/robot_core/build install --record /home/luna/Desktop/robot_ws/build/robot_core/install.log --install-scripts $base/lib/robot_core --single-version-externally-managed install_data
+[1.991s] running egg_info
+[2.022s] writing ../../build/robot_core/robot_core.egg-info/PKG-INFO
+[2.023s] writing dependency_links to ../../build/robot_core/robot_core.egg-info/dependency_links.txt
+[2.024s] writing entry points to ../../build/robot_core/robot_core.egg-info/entry_points.txt
+[2.025s] writing requirements to ../../build/robot_core/robot_core.egg-info/requires.txt
+[2.026s] writing top-level names to ../../build/robot_core/robot_core.egg-info/top_level.txt
+[2.083s] reading manifest file '../../build/robot_core/robot_core.egg-info/SOURCES.txt'
+[2.085s] writing manifest file '../../build/robot_core/robot_core.egg-info/SOURCES.txt'
+[2.085s] running build
+[2.085s] running build_py
+[2.086s] copying robot_core/server_node.py -> /home/luna/Desktop/robot_ws/build/robot_core/build/lib/robot_core
+[2.086s] copying robot_core/servo_node.py -> /home/luna/Desktop/robot_ws/build/robot_core/build/lib/robot_core
+[2.086s] copying robot_core/ultrasonic_node.py -> /home/luna/Desktop/robot_ws/build/robot_core/build/lib/robot_core
+[2.087s] running install
+[2.099s] running install_lib
+[2.127s] copying /home/luna/Desktop/robot_ws/build/robot_core/build/lib/robot_core/server_node.py -> /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core
+[2.127s] copying /home/luna/Desktop/robot_ws/build/robot_core/build/lib/robot_core/servo_node.py -> /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core
+[2.128s] copying /home/luna/Desktop/robot_ws/build/robot_core/build/lib/robot_core/ultrasonic_node.py -> /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core
+[2.129s] byte-compiling /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/server_node.py to server_node.cpython-312.pyc
+[2.132s] byte-compiling /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/servo_node.py to servo_node.cpython-312.pyc
+[2.133s] byte-compiling /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/ultrasonic_node.py to ultrasonic_node.cpython-312.pyc
+[2.135s] running install_data
+[2.135s] running install_egg_info
+[2.168s] removing '/home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core-0.0.0-py3.12.egg-info' (and everything under it)
+[2.168s] Copying ../../build/robot_core/robot_core.egg-info to /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core-0.0.0-py3.12.egg-info
+[2.171s] running install_scripts
+[2.372s] Installing move_node script to /home/luna/Desktop/robot_ws/install/robot_core/lib/robot_core
+[2.372s] Installing server_node script to /home/luna/Desktop/robot_ws/install/robot_core/lib/robot_core
+[2.374s] Installing servo_node script to /home/luna/Desktop/robot_ws/install/robot_core/lib/robot_core
+[2.375s] Installing ultrasonic_node script to /home/luna/Desktop/robot_ws/install/robot_core/lib/robot_core
+[2.380s] writing list of installed files to '/home/luna/Desktop/robot_ws/build/robot_core/install.log'
+[2.463s] Invoked command in '/home/luna/Desktop/robot_ws/src/robot_core' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/luna/Desktop/robot_ws/build/robot_core/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/robot_core build --build-base /home/luna/Desktop/robot_ws/build/robot_core/build install --record /home/luna/Desktop/robot_ws/build/robot_core/install.log --install-scripts $base/lib/robot_core --single-version-externally-managed install_data

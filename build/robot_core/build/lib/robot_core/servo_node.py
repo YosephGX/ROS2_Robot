@@ -6,7 +6,7 @@
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Int32MultiArray, Bool
 
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import servo
@@ -47,6 +47,13 @@ class ServoNode(Node):
             self.head_callback,
             10
         )
+        # Suscriptor ROS2 3: Para el control de la Garra
+        self.claw_sub = self.create_subscription(
+            Bool,
+            '/claw_cmd',
+            self.claw_callback,
+            10
+        )
         # 3. Posiciones Iniciales (Home)
         self.move_to_home()
         self.get_logger().info('Nodo ServoNode ROS2 iniciado correctamente.')
@@ -57,16 +64,24 @@ class ServoNode(Node):
         if ch in self.servos:
             self.servos[ch].angle = angle
             
+    def claw_callback(self, msg):
+        """ Controla la garra mediante un mensaje booleano: True = cerrar, False = abrir."""
+        if msg.data:
+            self.set_servo_angle(15, 110)  # Garra cerrada
+            self.get_logger().debug('Garra cerrada.')
+        else:
+            self.set_servo_angle(15, 50)   # Garra abierta
+            self.get_logger().debug('Garra abierta.')
+            
     def arm_callback(self, msg):
         """
         Espera un arreglo de 3 valores: [Hombro (12), Mano (13), Garra (15)]
         Ejemplo de mensaje: [90, 45, 120]
         """
-        if len(msg.data) >= 3:
+        if len(msg.data) >= 2:
             self.set_servo_angle(12, msg.data[0])
             self.set_servo_angle(13, msg.data[1])
-            self.set_servo_angle(15, msg.data[2])
-            self.get_logger().debug(f'Brazo movido a: {msg.data[:3]}')
+            self.get_logger().debug(f'Brazo movido a: {msg.data[:2]}')
             
     def head_callback(self, msg):
         """
@@ -98,7 +113,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
