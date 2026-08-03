@@ -19,7 +19,7 @@ class UltrasonicNode(Node):
         self.echo_pin = 8
         self.max_distance = 2 # Distancia máxima en metros para el sensor
         self.freq = 10
-        self.safety_distance = 20
+        self.safety_distance = 15
         
         # 2. Configuración de Hardware GPIO
         self.sensor = DistanceSensor(echo=self.echo_pin, trigger=self.trig_pin, max_distance=self.max_distance)

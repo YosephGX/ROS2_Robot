@@ -67,10 +67,10 @@ class ServoNode(Node):
     def claw_callback(self, msg):
         """ Controla la garra mediante un mensaje booleano: True = cerrar, False = abrir."""
         if msg.data:
-            self.set_servo_angle(15, 110)  # Garra cerrada
+            self.set_servo_angle(15, 8)  # Garra cerrada
             self.get_logger().debug('Garra cerrada.')
         else:
-            self.set_servo_angle(15, 50)   # Garra abierta
+            self.set_servo_angle(15, 90)   # Garra abierta
             self.get_logger().debug('Garra abierta.')
             
     def arm_callback(self, msg):
