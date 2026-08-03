@@ -11,6 +11,7 @@ setup.py
 launch/robot_launch.py
 resource/robot_core
 robot_core/__init__.py
+robot_core/led_node.py
 robot_core/move_node.py
 robot_core/server_node.py
 robot_core/servo_node.py

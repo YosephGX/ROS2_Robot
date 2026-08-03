@@ -1,8 +1,10 @@
+/home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/led_node.py
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/__init__.py
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/server_node.py
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/servo_node.py
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/move_node.py
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/ultrasonic_node.py
+/home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/__pycache__/led_node.cpython-312.pyc
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/__pycache__/__init__.cpython-312.pyc
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/__pycache__/server_node.cpython-312.pyc
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core/__pycache__/servo_node.cpython-312.pyc
@@ -18,6 +20,7 @@
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core-0.0.0-py3.12.egg-info/SOURCES.txt
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core-0.0.0-py3.12.egg-info/dependency_links.txt
 /home/luna/Desktop/robot_ws/install/robot_core/lib/python3.12/site-packages/robot_core-0.0.0-py3.12.egg-info/entry_points.txt
+/home/luna/Desktop/robot_ws/install/robot_core/lib/robot_core/led_node
 /home/luna/Desktop/robot_ws/install/robot_core/lib/robot_core/move_node
 /home/luna/Desktop/robot_ws/install/robot_core/lib/robot_core/server_node
 /home/luna/Desktop/robot_ws/install/robot_core/lib/robot_core/servo_node

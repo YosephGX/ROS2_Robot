@@ -42,4 +42,11 @@ def generate_launch_description():
             name='server_node',
             output='screen'
         ),
+        # 5. Nodo de Luces de Policía (LEDs WS2812)
+        Node(
+            package='robot_core',
+            executable='led_node',
+            name='led_node',
+            output='screen'
+        )
     ])

@@ -6,9 +6,11 @@
 
 import time
 import rclpy
+import warnings
 from rclpy.node import Node
 from std_msgs.msg import Float32, Bool
 from gpiozero import DistanceSensor
+warnings.filterwarnings("ignore", message=".*PWMSoftwareFallback.*")
 
 class UltrasonicNode(Node):
     def __init__(self):
