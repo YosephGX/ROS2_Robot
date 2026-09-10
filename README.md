@@ -75,7 +75,9 @@ Adafruit-Blinka==9.2.0
 adafruit-circuitpython-busdevice==5.2.17
 adafruit-circuitpython-connectionmanager==3.1.8
 adafruit-circuitpython-motor==3.5.0
+adafruit-circuitpython-neopixel-spi==1.0.16
 adafruit-circuitpython-pca9685==3.4.22
+adafruit-circuitpython-pixelbuf==2.0.12
 adafruit-circuitpython-register==1.12.1
 adafruit-circuitpython-requests==4.1.17
 adafruit-circuitpython-typing==1.12.3
