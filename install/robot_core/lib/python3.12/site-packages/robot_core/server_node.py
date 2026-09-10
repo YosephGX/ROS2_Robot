@@ -6,15 +6,22 @@
 
 import threading
 import uvicorn
+import psutil
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Int32MultiArray, Bool
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 from typing import Optional, Any
+
+robot_state = {
+    "head_angles": [90, 90],
+    "arm_angles": [90, 90],
+    "claw_closed": False,
+}
 
 # -- MODELO DE COMANDOS --
 class RobotCommand(BaseModel):
@@ -32,7 +39,8 @@ class WebBridgeNode(Node):
         
         # Estado actual de servos para enviar en bloque
         self.head_angles = [90, 90]        # [Pan, Tilt]
-        self.arm_angles = [90, 90, 90]     # [Hombro, Mano, Garra]
+        self.arm_angles = [90, 90]     # [Hombro, Mano]
+        self.claw_closed = False
         self.get_logger().info('WebBridgeNode ROS2 iniciado correctamente.')
 
     def publish_twist(self, linear_x: float, angular_z: float):
@@ -54,8 +62,9 @@ class WebBridgeNode(Node):
         self.arm_pub.publish(msg)
         
     def publish_claw(self, close: bool):
+        self.claw_closed = close
         msg = Bool()
-        msg.data = close
+        msg.data = self.claw_closed
         self.claw_pub.publish(msg)
 
 # -- INTERFAZ GRÁFICA (HTML + CSS + JS) --
@@ -91,18 +100,25 @@ HTML_CONTENT = """
     <div id="status" class="status disconnected">Desconectado</div>
 
     <div class="container">
+        <!-- Tarjeta de Telemetria -->
+        <div class="card" style="border: 1px solid #ccc; padding: 10px; grid-column: 1 / -1;">
+            <div id="telemetry" style="display: flex; flex-direction: column; align-items: center;">
+                <p>🌡️ Temp: <span id="temp-val">--</span> °C - 🧠 CPU: <span id="cpu-val">--</span> % - 💾 RAM: <span id="ram-val">--</span> %</p>
+            </div>
+        </div>
+        
         <!-- Tarjeta de Locomoción -->
         <div class="card">
             <h2>Locomoción (W, A, S, D)</h2>
             <div class="dpad">
                 <div></div>
-                <button class="btn" id="btn-forward" onmousedown="sendCmd('move', {dir: 'forward'})" onmouseup="sendCmd('move', {dir: 'stop'})">W / ▲</button>
+                <button class="btn" id="btn-forward" onmousedown="setMove(1, null)" onmouseup="setMove(0, null)" ontouchstart="setMove(1, null)" ontouchend="setMove(0, null)">W / ▲</button>
                 <div></div>
-                <button class="btn" id="btn-left" onmousedown="sendCmd('move', {dir: 'left'})" onmouseup="sendCmd('move', {dir: 'stop'})">A / ◀</button>
-                <button class="btn btn-stop" onclick="sendCmd('move', {dir: 'stop'})">STOP</button>
-                <button class="btn" id="btn-right" onmousedown="sendCmd('move', {dir: 'right'})" onmouseup="sendCmd('move', {dir: 'stop'})">D / ▶</button>
+                <button class="btn" id="btn-left" onmousedown="setMove(null, 1)" onmouseup="setMove(null, 0)" ontouchstart="setMove(null, 1)" ontouchend="setMove(null, 0)">A / ◀</button>
+                <button class="btn btn-stop" onclick="stopMove()">STOP</button>
+                <button class="btn" id="btn-right" onmousedown="setMove(null, -1)" onmouseup="setMove(null, 0)" ontouchstart="setMove(null, -1)" ontouchend="setMove(null, 0)">D / ▶</button>
                 <div></div>
-                <button class="btn" id="btn-backward" onmousedown="sendCmd('move', {dir: 'backward'})" onmouseup="sendCmd('move', {dir: 'stop'})">S / ▼</button>
+                <button class="btn" id="btn-backward" onmousedown="setMove(-1, null)" onmouseup="setMove(0, null)" ontouchstart="setMove(-1, null)" ontouchend="setMove(0, null)">S / ▼</button>
                 <div></div>
             </div>
         </div>
@@ -137,9 +153,10 @@ HTML_CONTENT = """
     <script>
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${wsProtocol}//${window.location.host}/ws/control`;
-        let ws;
+        let moveState = { x: 0, z: 0 };
         let clawClosed = false;
-
+        let ws;
+        
         function connect() {
             ws = new WebSocket(wsUrl);
             const statusEl = document.getElementById('status');
@@ -153,6 +170,17 @@ HTML_CONTENT = """
                 statusEl.className = 'status disconnected';
                 setTimeout(connect, 2000);
             };
+        }
+        
+        function setMove(x, z) {
+            if (x !== null) moveState.x = x;
+            if (z !== null) moveState.z = z;
+            sendCmd('move', moveState);
+        }
+        
+        function stopMove() {
+            moveState = { x: 0, z: 0 };
+            sendCmd('move', moveState);
         }
 
         function sendCmd(action, value = null) {
@@ -181,23 +209,65 @@ HTML_CONTENT = """
             sendCmd('head', [pan, tilt]);
             sendCmd('arm', [hombro, mano]);
         }
+        
+        function fetchTelemetry() {
+            fetch('/api/telemetry')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('temp-val').innerText = data.temp;
+                    document.getElementById('cpu-val').innerText = data.cpu;
+                    document.getElementById('ram-val').innerText = data.memory;
+                    
+                    if (data.temp > 70) document.getElementById('temp-val').style.color = "red";
+                    if (data.cpu > 80) document.getElementById('cpu-val').style.color = "red";
+                    if (data.memory > 80) document.getElementById('ram-val').style.color = "red";
+                }).catch(err => console.error('Error fetching telemetry:', err));
+        }
 
         // Control por teclado
         document.addEventListener('keydown', (e) => {
             if (e.repeat) return;
-            if (e.key === 'w' || e.key === 'ArrowUp') sendCmd('move', {dir: 'forward'});
-            if (e.key === 's' || e.key === 'ArrowDown') sendCmd('move', {dir: 'backward'});
-            if (e.key === 'a' || e.key === 'ArrowLeft') sendCmd('move', {dir: 'left'});
-            if (e.key === 'd' || e.key === 'ArrowRight') sendCmd('move', {dir: 'right'});
-            if (e.key === ' ' || e.key === 'Spacebar') sendCmd('move', {dir: 'stop'});
+            let changed = false;
+            if (e.key === 'w' || e.key === 'ArrowUp') { moveState.x = 1.0; changed = true; }
+            if (e.key === 's' || e.key === 'ArrowDown') { moveState.x = -1.0; changed = true; }
+            if (e.key === 'a' || e.key === 'ArrowLeft') { moveState.z = 1.0; changed = true; }
+            if (e.key === 'd' || e.key === 'ArrowRight') { moveState.z = -1.0; changed = true; }
+            if (e.key === ' ' || e.key === 'Spacebar') { moveState.x = 0; moveState.z = 0; changed = true; }
+            if (changed) sendCmd('move', moveState);
         });
 
         document.addEventListener('keyup', (e) => {
-            if (['w','s','a','d','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) {
-                sendCmd('move', {dir: 'stop'});
-            }
+            let changed = false;
+            if ((e.key === 'w' || e.key === 'ArrowUp') && moveState.x === 1.0) { moveState.x = 0; changed = true; }
+            if ((e.key === 's' || e.key === 'ArrowDown') && moveState.x === -1.0) { moveState.x = 0; changed = true; }
+            if ((e.key === 'a' || e.key === 'ArrowLeft') && moveState.z === 1.0) { moveState.z = 0; changed = true; }
+            if ((e.key === 'd' || e.key === 'ArrowRight') && moveState.z === -1.0) { moveState.z = 0; changed = true; }
+            if (changed) sendCmd('move', moveState);
         });
-
+        
+        window.addEventListener('DOMContentLoaded', (event) => {
+            fetchTelemetry();
+            fetch('/api/state')
+                .then(response => response.json())
+                .then(data => {
+                    // 1. Actualizar el valor de los sliders (IDs corregidos)
+                    document.getElementById('pan').value = data.head_angles[0];
+                    document.getElementById('tilt').value = data.head_angles[1];
+                    document.getElementById('hombro').value = data.arm_angles[0];
+                    document.getElementById('mano').value = data.arm_angles[1];
+                    // 2. Actualizar las etiquetas de texto
+                    document.getElementById('val-pan').textContent = data.head_angles[0] + '°';
+                    document.getElementById('val-tilt').textContent = data.head_angles[1] + '°';
+                    document.getElementById('val-hombro').textContent = data.arm_angles[0] + '°';
+                    document.getElementById('val-mano').textContent = data.arm_angles[1] + '°';
+                    // 3. Sincronizar variable global y botón de la garra
+                    clawClosed = data.claw_closed;
+                    document.getElementById('clawBtn').textContent = clawClosed ? 'Garra: Cerrada' : 'Garra: Abierta';
+                    // 4. Log de estado cargado
+                    console.log('Robot state loaded:', data);
+                }).catch(err => console.error('Error fetching robot state:', err));
+            setInterval(fetchTelemetry, 3000);
+        });
         connect();
     </script>
 </body>
@@ -208,10 +278,30 @@ HTML_CONTENT = """
 app = FastAPI(title="Robot Controller Server")
 ros_node: Optional[WebBridgeNode] = None
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=FileResponse)
 async def get_interface():
     """ Sirve el panel de control web desde la raíz del servidor """
-    return HTML_CONTENT
+    ruta_html = "/home/luna/Desktop/robot_ws/src/robot_core/robot_core/index.html"
+    return FileResponse(ruta_html, media_type='text/html')
+
+@app.get("/api/state")
+def get_robot_state():
+    return JSONResponse(content=robot_state)
+
+@app.get("/api/telemetry")
+def get_telemetry():
+    cpu_usage = psutil.cpu_percent(interval=0.1)
+    memory_info = psutil.virtual_memory().percent
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+            cpu_temp = float(f.read().strip()) / 1000.0
+    except Exception:
+        cpu_temp = 0.0
+    return JSONResponse(content={
+        "cpu": cpu_usage,
+        "memory": memory_info,
+        "temp": cpu_temp,
+    })
 
 @app.websocket("/ws/control")
 async def websocket_endpoint(websocket: WebSocket):
@@ -226,23 +316,19 @@ async def websocket_endpoint(websocket: WebSocket):
             
             # Despacho de comandos hacia tópicos ROS2
             if cmd.action == "move" and isinstance(cmd.value, dict):
-                direction = cmd.value.get("dir", "stop")
-                if direction == "forward":
-                    ros_node.publish_twist(1.0, 0.0)
-                elif direction == "backward":
-                    ros_node.publish_twist(-1.0, 0.0)
-                elif direction == "left":
-                    ros_node.publish_twist(0.0, 1.0)
-                elif direction == "right":
-                    ros_node.publish_twist(0.0, -1.0)
-                else:
-                    ros_node.publish_twist(0.0, 0.0)
+                # Leemos la X y la Z, si no vienen usamos 0.0
+                linear_x = float(cmd.value.get("x", 0.0))
+                angular_z = float(cmd.value.get("z", 0.0))
+                ros_node.publish_twist(linear_x, angular_z)
             elif cmd.action == "head" and isinstance(cmd.value, list) and len(cmd.value) == 2:
                 ros_node.publish_head(int(cmd.value[0]), int(cmd.value[1]))
+                robot_state["head_angles"] = [int(cmd.value[0]), int(cmd.value[1])]
             elif cmd.action == "arm" and isinstance(cmd.value, list) and len(cmd.value) == 2:
                 ros_node.publish_arm(int(cmd.value[0]), int(cmd.value[1]))
+                robot_state["arm_angles"] = [int(cmd.value[0]), int(cmd.value[1])]
             elif cmd.action == "claw" and isinstance(cmd.value, bool):
                 ros_node.publish_claw(cmd.value)
+                robot_state["claw_closed"] = cmd.value
     except WebSocketDisconnect:
         if ros_node:
             ros_node.publish_twist(0.0, 0.0)  # Freno de seguridad por desconexión
