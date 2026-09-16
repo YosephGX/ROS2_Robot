@@ -17,11 +17,21 @@ from std_msgs.msg import Bool
 LED_SOCKET = '/run/robot-led.sock'
 NUM_PIXELS = 16
 
+BLUE = (0, 0, 255)
+RED = (255, 0, 0)
+OFF = (0, 0, 0)
+# Mismo patrón que el repo original (robotLight.py, policeProcessing): toda la tira
+# destella 3 veces en azul, pausa, 3 veces en rojo, pausa. Cada paso dura STEP_S.
+# Se pinta la tira entera con un solo color en vez de repartir colores por mitades,
+# porque no todos los índices tienen un LED físico visible (el original solo usa 0-11).
+STEP_S = 0.05
+POLICE_SEQUENCE = [BLUE, OFF] * 3 + [OFF] * 2 + [RED, OFF] * 3 + [OFF] * 2
+
 class PoliceLightNode(Node):
     def __init__(self):
         super().__init__('led_node')
         self.enabled = False  # Arranca apagado: se enciende desde el panel web
-        self.is_red = True
+        self.step = 0
         self.warned = False
 
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -34,8 +44,7 @@ class PoliceLightNode(Node):
             self.led_callback,
             10
         )
-        # Animacion a una frecuencia de 5Hz (0.2s)
-        self.timer = self.create_timer(0.2, self.police_animation)
+        self.timer = self.create_timer(STEP_S, self.police_animation)
         self.get_logger().info('Nodo de luces de policía iniciado correctamente (apagado).')
 
     def send_pixels(self, pixels):
@@ -61,22 +70,17 @@ class PoliceLightNode(Node):
         if msg.data == self.enabled:
             return
         self.enabled = msg.data
-        if not self.enabled:
+        if self.enabled:
+            self.step = 0  # Siempre empieza por los destellos azules
+        else:
             self.clear()
         self.get_logger().info(f'Luces {"encendidas" if self.enabled else "apagadas"}.')
 
     def police_animation(self):
         if not self.enabled:
             return
-        half = NUM_PIXELS // 2
-        if self.is_red:
-            # Mitad de los LEDs en rojo y la otra mitad apagada
-            pixels = [(255, 0, 0)] * half + [(0, 0, 0)] * (NUM_PIXELS - half)
-        else:
-            # Mitad de los LEDs apagados y la otra mitad en azul
-            pixels = [(0, 0, 0)] * half + [(0, 0, 255)] * (NUM_PIXELS - half)
-        self.send_pixels(pixels)
-        self.is_red = not self.is_red
+        self.send_pixels([POLICE_SEQUENCE[self.step]] * NUM_PIXELS)
+        self.step = (self.step + 1) % len(POLICE_SEQUENCE)
 
 def main(args=None):
     rclpy.init(args=args)
