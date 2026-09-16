@@ -39,7 +39,7 @@
         <!-- Tarjeta de Cámara -->
         <div class="card" style="grid-column: 1 / -1;">
             <h2>Cámara</h2>
-            <img id="camera-feed" src="/stream.mjpg" alt="Video de la cámara" style="width: 100%; border-radius: 8px; background: #000;">
+            <img id="camera-feed" src="" alt="Video de la cámara" style="width: 100%; border-radius: 8px; background: #000;">
         </div>
 
         <!-- Tarjeta de Locomoción -->
@@ -77,7 +77,7 @@
         function connect() {
             ws = new WebSocket(wsUrl);
             const statusEl = document.getElementById('status');
-            
+
             ws.onopen = () => {
                 statusEl.textContent = 'Conectado al Robot';
                 statusEl.className = 'status connected';
@@ -86,6 +86,26 @@
                 statusEl.textContent = 'Desconectado - Reconectando...';
                 statusEl.className = 'status disconnected';
                 setTimeout(connect, 2000);
+            };
+        }
+
+        // Cámara por WebSocket (frames binarios): a diferencia de un <img> con stream
+        // HTTP multipart, esto no se bufferea al pasar por un túnel/proxy como Cloudflare.
+        let camWs;
+        let lastFrameUrl = null;
+
+        function connectCamera() {
+            const camWsUrl = `${wsProtocol}//${window.location.host}/ws/camera`;
+            camWs = new WebSocket(camWsUrl);
+            camWs.binaryType = 'blob';
+            camWs.onmessage = (event) => {
+                const url = URL.createObjectURL(event.data);
+                document.getElementById('camera-feed').src = url;
+                if (lastFrameUrl) URL.revokeObjectURL(lastFrameUrl);
+                lastFrameUrl = url;
+            };
+            camWs.onclose = () => {
+                setTimeout(connectCamera, 2000);
             };
         }
         
@@ -159,6 +179,7 @@
             setInterval(fetchTelemetry, 3000);
         });
         connect();
+        connectCamera();
     </script>
 </body>
 </html>

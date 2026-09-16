@@ -96,7 +96,7 @@ HTML_CONTENT = """
         <!-- Tarjeta de Cámara -->
         <div class="card" style="grid-column: 1 / -1;">
             <h2>Cámara</h2>
-            <img id="camera-feed" src="/stream.mjpg" alt="Video de la cámara" style="width: 100%; border-radius: 8px; background: #000;">
+            <img id="camera-feed" src="" alt="Video de la cámara" style="width: 100%; border-radius: 8px; background: #000;">
         </div>
 
         <!-- Tarjeta de Locomoción -->
@@ -134,7 +134,7 @@ HTML_CONTENT = """
         function connect() {
             ws = new WebSocket(wsUrl);
             const statusEl = document.getElementById('status');
-            
+
             ws.onopen = () => {
                 statusEl.textContent = 'Conectado al Robot';
                 statusEl.className = 'status connected';
@@ -143,6 +143,26 @@ HTML_CONTENT = """
                 statusEl.textContent = 'Desconectado - Reconectando...';
                 statusEl.className = 'status disconnected';
                 setTimeout(connect, 2000);
+            };
+        }
+
+        // Cámara por WebSocket (frames binarios): a diferencia de un <img> con stream
+        // HTTP multipart, esto no se bufferea al pasar por un túnel/proxy como Cloudflare.
+        let camWs;
+        let lastFrameUrl = null;
+
+        function connectCamera() {
+            const camWsUrl = `${wsProtocol}//${window.location.host}/ws/camera`;
+            camWs = new WebSocket(camWsUrl);
+            camWs.binaryType = 'blob';
+            camWs.onmessage = (event) => {
+                const url = URL.createObjectURL(event.data);
+                document.getElementById('camera-feed').src = url;
+                if (lastFrameUrl) URL.revokeObjectURL(lastFrameUrl);
+                lastFrameUrl = url;
+            };
+            camWs.onclose = () => {
+                setTimeout(connectCamera, 2000);
             };
         }
         
@@ -216,6 +236,7 @@ HTML_CONTENT = """
             setInterval(fetchTelemetry, 3000);
         });
         connect();
+        connectCamera();
     </script>
 </body>
 </html>
@@ -237,7 +258,9 @@ def get_robot_state():
 
 @app.get("/stream.mjpg")
 async def camera_stream():
-    """ Reenvía el stream MJPEG de camera_node (solo escucha en localhost) hacia el cliente. """
+    """ Reenvía el stream MJPEG de camera_node (solo escucha en localhost) hacia el cliente.
+    Sirve para pruebas directas en LAN; a través de un túnel (Cloudflare, etc.) usar /ws/camera,
+    ya que los proxies suelen bufferear streams HTTP multipart de larga duración. """
     client = httpx.AsyncClient(timeout=None)
     try:
         upstream = await client.send(
@@ -259,6 +282,56 @@ async def camera_stream():
         relay(),
         media_type=upstream.headers.get("content-type", "multipart/x-mixed-replace"),
     )
+
+async def _iter_mjpeg_frames(upstream):
+    """ Reensambla el stream multipart de camera_node en frames JPEG individuales. """
+    buffer = b""
+    async for chunk in upstream.aiter_raw():
+        buffer += chunk
+        while True:
+            header_end = buffer.find(b"\r\n\r\n")
+            if header_end == -1:
+                break
+            length = None
+            for line in buffer[:header_end].split(b"\r\n"):
+                if line.lower().startswith(b"content-length:"):
+                    length = int(line.split(b":", 1)[1].strip())
+                    break
+            if length is None:
+                # No era un encabezado de frame (p.ej. el boundary inicial); descartar y seguir
+                buffer = buffer[header_end + 4:]
+                continue
+            frame_start = header_end + 4
+            frame_end = frame_start + length
+            if len(buffer) < frame_end + 2:  # +2 por el \r\n final de cada parte
+                break
+            yield buffer[frame_start:frame_end]
+            buffer = buffer[frame_end + 2:]
+
+@app.websocket("/ws/camera")
+async def camera_ws(websocket: WebSocket):
+    """ Envía cada frame JPEG como mensaje binario por WebSocket en vez de un stream HTTP:
+    los proxies/túneles (Cloudflare incluido) manejan WebSockets en vivo sin bufferear,
+    a diferencia de una respuesta HTTP multipart de larga duración. """
+    await websocket.accept()
+    client = httpx.AsyncClient(timeout=None)
+    try:
+        upstream = await client.send(
+            client.build_request("GET", CAMERA_STREAM_URL), stream=True
+        )
+    except httpx.ConnectError:
+        await websocket.close(code=1011)
+        await client.aclose()
+        return
+
+    try:
+        async for frame in _iter_mjpeg_frames(upstream):
+            await websocket.send_bytes(frame)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await upstream.aclose()
+        await client.aclose()
 
 @app.get("/api/telemetry")
 def get_telemetry():
