@@ -89,7 +89,13 @@ HTML_CONTENT = """
                 <p>🌡️ Temp: <span id="temp-val">--</span> °C - 🧠 CPU: <span id="cpu-val">--</span> % - 💾 RAM: <span id="ram-val">--</span> %</p>
             </div>
         </div>
-        
+
+        <!-- Tarjeta de Cámara -->
+        <div class="card" style="grid-column: 1 / -1;">
+            <h2>Cámara</h2>
+            <img id="camera-feed" src="" alt="Video de la cámara" style="width: 100%; border-radius: 8px; background: #000;">
+        </div>
+
         <!-- Tarjeta de Locomoción -->
         <div class="card">
             <h2>Locomoción (W, A, S, D)</h2>
@@ -204,6 +210,8 @@ HTML_CONTENT = """
         });
         
         window.addEventListener('DOMContentLoaded', (event) => {
+            document.getElementById('camera-feed').src =
+                `http://${window.location.hostname}:8090/stream.mjpg`;
             fetchTelemetry();
             fetch('/api/state')
                 .then(response => response.json())

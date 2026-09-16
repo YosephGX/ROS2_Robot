@@ -32,6 +32,7 @@ setup(
             'ultrasonic_node = robot_core.ultrasonic_node:main',
             'server_node = robot_core.server_node:main',
             'led_node = robot_core.led_node:main',
+            'camera_node = robot_core.camera_node:main',
         ],
     },
 )
