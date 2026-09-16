@@ -16,9 +16,20 @@ Diferencias respecto a `main` (Pi5):
 - **Brazo/garra**: eliminados de `servo_node`, `server_node` y la interfaz web. Solo
   quedan los canales PCA9685 11 (tilt) y 14 (pan) de la cabeza.
 
+> **Nota**: el Pi4B de referencia para esta rama corre **Ubuntu Server 24.04 (Noble)**,
+> no Raspberry Pi OS. Los pasos de abajo están probados en ese entorno; en Raspberry
+> Pi OS Bookworm el proceso es más simple (`picamera2` viene preinstalado).
+
+### Instalar ROS2 Jazzy
+
+Ubuntu 24.04 no trae ROS2 preinstalado. Seguir la guía oficial: habilitar el
+repositorio *Universe*, agregar el repo apt de ROS2, e instalar
+`ros-jazzy-ros-base` + `ros-dev-tools` (incluye `colcon`).
+
 ### Habilitar SPI, I2C y cámara en `/boot/firmware/config.txt`
 
-En el bloque `[all]` inicial, descomentar SPI (I2C ya está activo):
+En el bloque `[all]` inicial, confirmar que estén activos (I2C ya lo está por
+defecto; SPI puede venir comentado):
 
 ```
 dtparam=i2c_arm=on
@@ -26,23 +37,57 @@ dtparam=spi=on
 ```
 
 La línea `camera_auto_detect=1` (más abajo en el mismo archivo) ya habilita
-automáticamente la cámara CSI vía libcamera — no requiere cambios adicionales,
-pero confirma que el driver de cámara *legacy* esté deshabilitado
-(`raspi-config` → Interface Options → Legacy Camera → No).
+automáticamente la cámara CSI vía libcamera — no requiere cambios adicionales.
 
-### Dependencias Python adicionales para esta rama
-
-Además de lo ya instalado para `main` (Adafruit Blinka, PCA9685, motor, gpiozero,
-FastAPI, etc.), se necesita:
+### Dependencias del sistema (apt)
 
 ```
-picamera2
-adafruit-circuitpython-neopixel-spi
-adafruit-circuitpython-pixelbuf
+sudo apt install -y python3-pip python3-libcamera libcamera-ipa libcamera-tools \
+  python3-rpi.gpio python3-gpiozero python3-fastapi python3-uvicorn \
+  python3-pydantic python3-smbus python3-prctl
 ```
 
-`picamera2` normalmente ya viene preinstalado en Raspberry Pi OS (Bookworm) vía
-`sudo apt install python3-picamera2`.
+### Dependencias Python adicionales (pip, con `--break-system-packages`)
+
+```
+pip3 install --break-system-packages \
+  adafruit-blinka adafruit-circuitpython-pca9685 adafruit-circuitpython-motor \
+  adafruit-circuitpython-neopixel-spi adafruit-circuitpython-pixelbuf picamera2
+```
+
+### Workarounds necesarios en Ubuntu (no aplican en Raspberry Pi OS)
+
+1. **`libcamera` no aparece en `sys.path`**: el paquete apt `python3-libcamera`
+   instala en `/usr/lib/aarch64-linux-gnu/python3.12/site-packages/`, una ruta
+   multi-arch que Python no agrega por defecto. Enlazarla al *user site-packages*
+   (persiste sin depender de variables de entorno, por lo que también funciona
+   dentro de los procesos que lanza `ros2 launch`):
+
+   ```
+   mkdir -p ~/.local/lib/python3.12/site-packages
+   ln -sf /usr/lib/aarch64-linux-gnu/python3.12/site-packages/libcamera \
+       ~/.local/lib/python3.12/site-packages/libcamera
+   ```
+
+2. **`picamera2` falla al importar por `pykms`/`PyQt5`**: esos paquetes
+   (`kmsxx`, Qt) no existen en Ubuntu genérico y solo los usan los modos de
+   *preview* con pantalla de picamera2, que este proyecto no usa (solo
+   streaming MJPEG headless). Se parcheó
+   `~/.local/lib/python3.12/site-packages/picamera2/previews/__init__.py`
+   para envolver esos imports en `try/except` en vez de fallar duro.
+
+3. **`move_node` falla con "No access to /dev/mem"**: `RPi.GPIO` necesita
+   `/dev/gpiomem` con grupo `dialout` (regla udev ya instalada por
+   `rpi.gpio-common`, pero no se reaplica a dispositivos ya existentes).
+   Agregar el usuario al grupo y recargar udev:
+
+   ```
+   sudo usermod -aG dialout $USER
+   sudo udevadm control --reload-rules && sudo udevadm trigger
+   ```
+
+   Cerrar sesión y volver a entrar (o reiniciar) para que el nuevo grupo
+   tome efecto.
 
 sudo nano /boot/firmware/config.txt
 ```
