@@ -33,6 +33,8 @@ class StreamingOutput(io.BufferedIOBase):
 
 
 class StreamingHandler(server.BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
     def do_GET(self):
         if self.path == '/':
             self.send_response(301)
@@ -88,11 +90,12 @@ class CameraNode(Node):
             self.output = StreamingOutput()
             self.picam2.start_recording(MJPEGEncoder(), FileOutput(self.output))
 
-            self.http_server = StreamingServer(('0.0.0.0', STREAM_PORT), StreamingHandler, self.output)
+            # Solo localhost: server_node.py hace de proxy hacia el exterior en /stream.mjpg.
+            self.http_server = StreamingServer(('127.0.0.1', STREAM_PORT), StreamingHandler, self.output)
             self.server_thread = Thread(target=self.http_server.serve_forever, daemon=True)
             self.server_thread.start()
             self.get_logger().info(
-                f'Streaming de cámara disponible en el puerto {STREAM_PORT} (/stream.mjpg).'
+                f'Streaming de cámara disponible en 127.0.0.1:{STREAM_PORT} (/stream.mjpg).'
             )
         except Exception as e:
             self.get_logger().error(f'Error al inicializar la cámara: {e}')

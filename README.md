@@ -4,50 +4,57 @@ El primer robot que he creado con la plataforma ROS2 sobre una Raspberry PI 5
 ## Rama `pi4b`: variante para Raspberry Pi 4B
 
 Esta rama adapta el proyecto a un Raspberry Pi 4B con cámara y luces LED, sin brazo
-robótico (solo el servo de cabeza pan/tilt que sostiene la cámara).
+robótico ni pan de cabeza — solo el servo de **tilt** (arriba/abajo) que sostiene la
+cámara, limitado por software a **0°-95°** (más allá de eso el cable de la cámara se
+masca contra el chasis).
 
 Diferencias respecto a `main` (Pi5):
 
-- **Cámara**: nodo nuevo `camera_node` (Picamera2/libcamera) que expone un stream
-  MJPEG propio en `http://<ip-del-robot>:8090/stream.mjpg`, integrado como tarjeta
-  de video en la interfaz web de control.
-- **LEDs**: mismo `led_node` (WS2812 vía SPI) que en `main`; en `main` probablemente
-  falla en silencio porque el SPI está deshabilitado — en esta rama debe habilitarse.
-- **Brazo/garra**: eliminados de `servo_node`, `server_node` y la interfaz web. Solo
-  quedan los canales PCA9685 11 (tilt) y 14 (pan) de la cabeza.
+- **Cámara**: nodo nuevo `camera_node` (Picamera2/libcamera) que captura video y lo
+  expone como MJPEG en `127.0.0.1:8090` (solo localhost). `server_node.py` hace de
+  proxy en `/stream.mjpg` sobre el mismo puerto 5000 que el resto de la interfaz web
+  — así todo pasa por un único host/puerto, lo cual importa si expones el robot por
+  un túnel (Cloudflare Tunnel, etc.): solo hay que mapear un hostname al puerto 5000.
+- **LEDs**: mismo `led_node` (WS2812 vía SPI) que en `main`.
+- **Brazo/garra/pan**: eliminados de `servo_node`, `server_node` y la interfaz web.
+  Solo queda el canal PCA9685 11 (tilt) de la cabeza.
 
 > **Nota**: el Pi4B de referencia para esta rama corre **Ubuntu Server 24.04 (Noble)**,
-> no Raspberry Pi OS. Los pasos de abajo están probados en ese entorno; en Raspberry
-> Pi OS Bookworm el proceso es más simple (`picamera2` viene preinstalado).
+> no Raspberry Pi OS. Los pasos de abajo están probados en ese entorno y son bastante
+> más largos que en Raspberry Pi OS porque casi nada del stack de cámara viene
+> empaquetado para Ubuntu genérico en una Raspberry Pi.
 
-### Instalar ROS2 Jazzy
+### 1. Instalar ROS2 Jazzy
 
 Ubuntu 24.04 no trae ROS2 preinstalado. Seguir la guía oficial: habilitar el
 repositorio *Universe*, agregar el repo apt de ROS2, e instalar
 `ros-jazzy-ros-base` + `ros-dev-tools` (incluye `colcon`).
 
-### Habilitar SPI, I2C y cámara en `/boot/firmware/config.txt`
-
-En el bloque `[all]` inicial, confirmar que estén activos (I2C ya lo está por
-defecto; SPI puede venir comentado):
+### 2. Habilitar I2C y SPI en `/boot/firmware/config.txt`
 
 ```
 dtparam=i2c_arm=on
-dtparam=spi=on
+dtoverlay=spi0-0cs
 ```
 
-La línea `camera_auto_detect=1` (más abajo en el mismo archivo) ya habilita
-automáticamente la cámara CSI vía libcamera — no requiere cambios adicionales.
+Se usa `dtoverlay=spi0-0cs` en vez de `dtparam=spi=on`: el overlay normal reserva
+también GPIO7/GPIO8 como chip-select (CE0/CE1), y GPIO8 es justo el pin ECHO del
+sensor ultrasónico (`ultrasonic_node.py`) — con `dtparam=spi=on` puro, `gpiozero`
+falla con `lgpio.error: 'GPIO busy'`. El overlay `spi0-0cs` deja libres CE0/CE1 y
+solo reserva SCLK/MOSI/MISO, que es todo lo que necesita `led_node` (NeoPixel por
+SPI no usa chip-select). La línea `camera_auto_detect=1` (más abajo en el mismo
+archivo) ya habilita la cámara CSI vía libcamera sin cambios adicionales.
 
-### Dependencias del sistema (apt)
+### 3. Dependencias del sistema (apt)
 
 ```
-sudo apt install -y python3-pip python3-libcamera libcamera-ipa libcamera-tools \
-  python3-rpi.gpio python3-gpiozero python3-fastapi python3-uvicorn \
-  python3-pydantic python3-smbus python3-prctl
+sudo apt install -y python3-pip python3-rpi.gpio python3-gpiozero \
+  python3-fastapi python3-uvicorn python3-pydantic python3-httpx python3-smbus
 ```
 
-### Dependencias Python adicionales (pip, con `--break-system-packages`)
+(`python3-httpx` lo usa `server_node.py` para el proxy de `/stream.mjpg`.)
+
+### 4. Dependencias Python adicionales (pip, con `--break-system-packages`)
 
 ```
 pip3 install --break-system-packages \
@@ -55,17 +62,47 @@ pip3 install --break-system-packages \
   adafruit-circuitpython-neopixel-spi adafruit-circuitpython-pixelbuf picamera2
 ```
 
+### 5. Compilar `libcamera` desde código fuente
+
+El `libcamera` que trae Ubuntu 24.04 por apt (v0.2.0) tiene un bug real en el
+manejador de pipeline RPi/ISP: cualquier captura de cámara (incluso con la
+herramienta nativa `cam`, sin Python de por medio) revienta con
+`FATAL default ipa_base.cpp:396 assertion "it != buffers_.end()" failed in
+prepareIsp()`. No es arreglable por parámetros ni con el repo apt oficial de
+Raspberry Pi (ese repo es para Debian Bookworm/Python 3.11 y choca con el Python
+3.12 de Ubuntu Noble). La solución fue compilar el fork que mantiene la propia
+Raspberry Pi Foundation, nativo contra este sistema:
+
+```
+sudo apt install -y meson ninja-build libudev-dev python3-ply libjpeg-dev \
+  libtiff-dev libdrm-dev
+
+git clone --depth 1 https://github.com/raspberrypi/libcamera.git ~/libcamera-src
+cd ~/libcamera-src
+meson setup build --prefix=/usr/local \
+  -Dpipelines=rpi/vc4 -Dipas=rpi/vc4 \
+  -Dgstreamer=disabled -Dqcam=disabled -Ddocumentation=disabled \
+  -Dlc-compliance=disabled -Dcam=disabled -Dpycamera=enabled
+ninja -C build -j2      # -j2 para no quedarse sin RAM en un Pi4B; toma 20-45+ min
+sudo ninja -C build install
+sudo ldconfig
+```
+
+Se instala en `/usr/local` y coexiste sin conflicto con la versión vieja de Ubuntu
+en `/usr` (sonames distintos: `libcamera.so.0.7` vs `libcamera.so.0.2`).
+
 ### Workarounds necesarios en Ubuntu (no aplican en Raspberry Pi OS)
 
-1. **`libcamera` no aparece en `sys.path`**: el paquete apt `python3-libcamera`
-   instala en `/usr/lib/aarch64-linux-gnu/python3.12/site-packages/`, una ruta
-   multi-arch que Python no agrega por defecto. Enlazarla al *user site-packages*
-   (persiste sin depender de variables de entorno, por lo que también funciona
-   dentro de los procesos que lanza `ros2 launch`):
+1. **Los bindings de Python de `libcamera` no quedan en `sys.path`**: el build de
+   meson los instala en `/usr/local/lib/python3/dist-packages/libcamera` (ruta
+   genérica), pero Python 3.12 busca en `/usr/local/lib/python3.12/dist-packages`
+   (con versión). Enlazar al *user site-packages* (persiste sin depender de
+   variables de entorno, por lo que también funciona dentro de los procesos que
+   lanza `ros2 launch`):
 
    ```
    mkdir -p ~/.local/lib/python3.12/site-packages
-   ln -sf /usr/lib/aarch64-linux-gnu/python3.12/site-packages/libcamera \
+   ln -sf /usr/local/lib/python3/dist-packages/libcamera \
        ~/.local/lib/python3.12/site-packages/libcamera
    ```
 
@@ -77,14 +114,26 @@ pip3 install --break-system-packages \
    para envolver esos imports en `try/except` en vez de fallar duro.
 
 3. **`move_node` falla con "No access to /dev/mem"**: `RPi.GPIO` necesita
-   `/dev/gpiomem` con grupo `dialout` (regla udev ya instalada por
-   `rpi.gpio-common`, pero no se reaplica a dispositivos ya existentes).
-   Agregar el usuario al grupo y recargar udev:
+   `/dev/gpiomem` con grupo `dialout`, pero la regla udev empaquetada
+   (`60-gpio.rules`) exige `SUBSYSTEM=="bcm2835-gpiomem"` y en este kernel el
+   subsistema real se llama solo `gpiomem` — la regla nunca hace match. Hace
+   falta una regla propia:
 
    ```
    sudo usermod -aG dialout $USER
-   sudo udevadm control --reload-rules && sudo udevadm trigger
+   echo 'SUBSYSTEM=="gpiomem", KERNEL=="gpiomem", GROUP="dialout", MODE="0660"' \
+     | sudo tee /etc/udev/rules.d/99-gpiomem-fix.rules
+   sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=gpiomem
    ```
+
+4. **`camera_node` falla con "Could not open any dma-buf provider"**: los
+   dispositivos `/dev/dma_heap/*` pertenecen al grupo `video`, hace falta:
+
+   ```
+   sudo usermod -aG video $USER
+   ```
+
+   (Los cambios de grupo requieren cerrar sesión y volver a entrar, o `sudo reboot`.)
 
    Cerrar sesión y volver a entrar (o reiniciar) para que el nuevo grupo
    tome efecto.

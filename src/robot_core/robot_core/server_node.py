@@ -8,15 +8,18 @@ import os
 import threading
 import uvicorn
 import psutil
+import httpx
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Int32
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Any
+
+CAMERA_STREAM_URL = "http://127.0.0.1:8090/stream.mjpg"
 
 robot_state = {
     "tilt_angle": 90,
@@ -93,7 +96,7 @@ HTML_CONTENT = """
         <!-- Tarjeta de Cámara -->
         <div class="card" style="grid-column: 1 / -1;">
             <h2>Cámara</h2>
-            <img id="camera-feed" src="" alt="Video de la cámara" style="width: 100%; border-radius: 8px; background: #000;">
+            <img id="camera-feed" src="/stream.mjpg" alt="Video de la cámara" style="width: 100%; border-radius: 8px; background: #000;">
         </div>
 
         <!-- Tarjeta de Locomoción -->
@@ -202,8 +205,6 @@ HTML_CONTENT = """
         });
         
         window.addEventListener('DOMContentLoaded', (event) => {
-            document.getElementById('camera-feed').src =
-                `http://${window.location.hostname}:8090/stream.mjpg`;
             fetchTelemetry();
             fetch('/api/state')
                 .then(response => response.json())
@@ -233,6 +234,31 @@ async def get_interface():
 @app.get("/api/state")
 def get_robot_state():
     return JSONResponse(content=robot_state)
+
+@app.get("/stream.mjpg")
+async def camera_stream():
+    """ Reenvía el stream MJPEG de camera_node (solo escucha en localhost) hacia el cliente. """
+    client = httpx.AsyncClient(timeout=None)
+    try:
+        upstream = await client.send(
+            client.build_request("GET", CAMERA_STREAM_URL), stream=True
+        )
+    except httpx.ConnectError:
+        await client.aclose()
+        return JSONResponse(status_code=503, content={"error": "Cámara no disponible"})
+
+    async def relay():
+        try:
+            async for chunk in upstream.aiter_raw():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        relay(),
+        media_type=upstream.headers.get("content-type", "multipart/x-mixed-replace"),
+    )
 
 @app.get("/api/telemetry")
 def get_telemetry():
