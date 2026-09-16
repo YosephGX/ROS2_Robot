@@ -1,0 +1,3 @@
+log/
+build/robot_core/colcon_command_prefix_setup_py.sh.env
+scripts/__pycache__/
