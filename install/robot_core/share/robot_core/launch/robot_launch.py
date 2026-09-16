@@ -48,5 +48,12 @@ def generate_launch_description():
             executable='led_node',
             name='led_node',
             output='screen'
+        ),
+        # 6. Nodo de Cámara (streaming MJPEG por HTTP)
+        Node(
+            package='robot_core',
+            executable='camera_node',
+            name='camera_node',
+            output='screen'
         )
     ])

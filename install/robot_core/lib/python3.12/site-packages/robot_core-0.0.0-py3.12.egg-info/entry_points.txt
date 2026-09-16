@@ -1,4 +1,5 @@
 [console_scripts]
+camera_node = robot_core.camera_node:main
 led_node = robot_core.led_node:main
 move_node = robot_core.move_node:main
 server_node = robot_core.server_node:main

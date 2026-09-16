@@ -4,6 +4,7 @@
 # Author      : TheYoseph
 # Date        : 2026/08/01
 
+import asyncio
 import os
 import threading
 import uvicorn
@@ -12,7 +13,7 @@ import httpx
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Int32
+from std_msgs.msg import Bool, Int32
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
@@ -23,6 +24,7 @@ CAMERA_STREAM_URL = "http://127.0.0.1:8090/stream.mjpg"
 
 robot_state = {
     "tilt_angle": 90,
+    "led_on": False,
 }
 
 # -- MODELO DE COMANDOS --
@@ -36,6 +38,7 @@ class WebBridgeNode(Node):
         super().__init__('server_node')
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.head_pub = self.create_publisher(Int32, '/head_cmds', 10)
+        self.led_pub = self.create_publisher(Bool, '/led_cmds', 10)
 
         # Estado actual del servo de tilt
         self.tilt_angle = 90
@@ -52,6 +55,11 @@ class WebBridgeNode(Node):
         msg = Int32()
         msg.data = tilt
         self.head_pub.publish(msg)
+
+    def publish_led(self, enabled: bool):
+        msg = Bool()
+        msg.data = bool(enabled)
+        self.led_pub.publish(msg)
 
 # -- INTERFAZ GRÁFICA (HTML + CSS + JS) --
 HTML_CONTENT = """
@@ -95,7 +103,7 @@ HTML_CONTENT = """
 
         <!-- Tarjeta de Cámara -->
         <div class="card" style="grid-column: 1 / -1;">
-            <h2>Cámara</h2>
+            <h2>Cámara <span id="cam-fps" style="float: right; font-size: 0.8rem; font-weight: normal; color: #9ca3af;">-- fps</span></h2>
             <img id="camera-feed" src="" alt="Video de la cámara" style="width: 100%; border-radius: 8px; background: #000;">
         </div>
 
@@ -123,6 +131,12 @@ HTML_CONTENT = """
                 <input type="range" id="tilt" min="0" max="95" value="90" oninput="updateServos()">
             </div>
         </div>
+
+        <!-- Tarjeta de Luces -->
+        <div class="card">
+            <h2>Luces (Policía)</h2>
+            <button class="btn" id="btn-led" style="width: 100%;" onclick="toggleLed()">🌑 Luces OFF</button>
+        </div>
     </div>
 
     <script>
@@ -146,26 +160,65 @@ HTML_CONTENT = """
             };
         }
 
-        // Cámara por WebSocket (frames binarios): a diferencia de un <img> con stream
-        // HTTP multipart, esto no se bufferea al pasar por un túnel/proxy como Cloudflare.
+        // Cámara por WebSocket con control de flujo: se pide un frame nuevo SOLO cuando ya
+        // se pintó el anterior. Si se aceptaran todos los frames que manda la cámara, los
+        // que no da tiempo a mostrar se acumularían en los búferes del túnel y el retraso
+        // crecería sin parar. Así el retraso queda fijo y el fps baja a lo que dé el enlace.
         let camWs;
-        let lastFrameUrl = null;
+        let shownFrameUrl = null;
+        let pendingFrameUrl = null;
+        let camWatchdog = null;
+        let fpsCount = 0;
 
         function connectCamera() {
             const camWsUrl = `${wsProtocol}//${window.location.host}/ws/camera`;
+            const img = document.getElementById('camera-feed');
             camWs = new WebSocket(camWsUrl);
             camWs.binaryType = 'blob';
+
+            const requestFrame = () => {
+                if (!camWs || camWs.readyState !== WebSocket.OPEN) return;
+                camWs.send('next');
+                // Si un frame se perdiera por el camino, no dejamos la imagen congelada.
+                clearTimeout(camWatchdog);
+                camWatchdog = setTimeout(requestFrame, 5000);
+            };
+
+            img.onload = () => {
+                if (shownFrameUrl) URL.revokeObjectURL(shownFrameUrl);
+                shownFrameUrl = pendingFrameUrl;
+                fpsCount++;
+                requestFrame();
+            };
+            img.onerror = () => setTimeout(requestFrame, 200);
+
+            camWs.onopen = () => requestFrame();
             camWs.onmessage = (event) => {
-                const url = URL.createObjectURL(event.data);
-                document.getElementById('camera-feed').src = url;
-                if (lastFrameUrl) URL.revokeObjectURL(lastFrameUrl);
-                lastFrameUrl = url;
+                clearTimeout(camWatchdog);
+                pendingFrameUrl = URL.createObjectURL(event.data);
+                img.src = pendingFrameUrl;
             };
             camWs.onclose = () => {
+                clearTimeout(camWatchdog);
+                document.getElementById('cam-fps').textContent = '-- fps';
                 setTimeout(connectCamera, 2000);
             };
         }
-        
+
+        let ledOn = false;
+
+        function toggleLed() {
+            ledOn = !ledOn;
+            sendCmd('led', ledOn);
+            updateLedButton();
+        }
+
+        function updateLedButton() {
+            const btn = document.getElementById('btn-led');
+            btn.textContent = ledOn ? '🚨 Luces ON' : '🌑 Luces OFF';
+            btn.classList.toggle('active', ledOn);
+        }
+
         function setMove(x, z) {
             if (x !== null) moveState.x = x;
             if (z !== null) moveState.z = z;
@@ -231,9 +284,15 @@ HTML_CONTENT = """
                 .then(data => {
                     document.getElementById('tilt').value = data.tilt_angle;
                     document.getElementById('val-tilt').textContent = data.tilt_angle + '°';
+                    ledOn = !!data.led_on;
+                    updateLedButton();
                     console.log('Robot state loaded:', data);
                 }).catch(err => console.error('Error fetching robot state:', err));
             setInterval(fetchTelemetry, 3000);
+            setInterval(() => {
+                document.getElementById('cam-fps').textContent = fpsCount + ' fps';
+                fpsCount = 0;
+            }, 1000);
         });
         connect();
         connectCamera();
@@ -310,9 +369,14 @@ async def _iter_mjpeg_frames(upstream):
 
 @app.websocket("/ws/camera")
 async def camera_ws(websocket: WebSocket):
-    """ Envía cada frame JPEG como mensaje binario por WebSocket en vez de un stream HTTP:
-    los proxies/túneles (Cloudflare incluido) manejan WebSockets en vivo sin bufferear,
-    a diferencia de una respuesta HTTP multipart de larga duración. """
+    """ Envía frames JPEG como mensajes binarios, con control de flujo extremo a extremo.
+
+    El cliente pide un frame ("next") solo cuando ya pintó el anterior, y aquí siempre se
+    manda el frame MÁS RECIENTE, descartando los intermedios. Sin este descarte la cámara
+    (~15 fps) produce mucho más de lo que aguanta el enlace y los frames sobrantes se
+    acumulan en los búferes del túnel y del navegador: el retraso crece sin límite con el
+    tiempo (5 s al principio, más de 60 s tras unos minutos). Con control de flujo el
+    retraso queda acotado a un frame, y el fps baja solo hasta lo que el enlace soporte. """
     await websocket.accept()
     client = httpx.AsyncClient(timeout=None)
     try:
@@ -324,12 +388,40 @@ async def camera_ws(websocket: WebSocket):
         await client.aclose()
         return
 
+    latest = {"frame": None, "seq": 0, "eof": False}
+    frame_ready = asyncio.Event()
+
+    async def read_upstream():
+        """ Consume el stream a toda velocidad y conserva únicamente el último frame. """
+        try:
+            async for frame in _iter_mjpeg_frames(upstream):
+                latest["frame"] = frame
+                latest["seq"] += 1
+                frame_ready.set()
+        finally:
+            latest["eof"] = True
+            frame_ready.set()
+
+    reader = asyncio.create_task(read_upstream())
     try:
-        async for frame in _iter_mjpeg_frames(upstream):
-            await websocket.send_bytes(frame)
+        sent_seq = 0
+        while True:
+            await websocket.receive_text()  # El cliente pide el siguiente frame
+            while latest["seq"] == sent_seq and not latest["eof"]:
+                frame_ready.clear()
+                await frame_ready.wait()
+            if latest["seq"] == sent_seq:  # Se acabó el stream de la cámara
+                break
+            sent_seq = latest["seq"]
+            await websocket.send_bytes(latest["frame"])
     except WebSocketDisconnect:
         pass
     finally:
+        reader.cancel()
+        try:
+            await reader
+        except asyncio.CancelledError:
+            pass
         await upstream.aclose()
         await client.aclose()
 
@@ -369,6 +461,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 tilt = int(cmd.value)
                 ros_node.publish_head(tilt)
                 robot_state["tilt_angle"] = tilt
+            elif cmd.action == "led":
+                enabled = bool(cmd.value)
+                ros_node.publish_led(enabled)
+                robot_state["led_on"] = enabled
     except WebSocketDisconnect:
         if ros_node:
             ros_node.publish_twist(0.0, 0.0)  # Freno de seguridad por desconexión

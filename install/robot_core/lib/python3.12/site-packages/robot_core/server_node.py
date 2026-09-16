@@ -4,28 +4,32 @@
 # Author      : TheYoseph
 # Date        : 2026/08/01
 
+import asyncio
+import os
 import threading
 import uvicorn
 import psutil
+import httpx
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Int32MultiArray, Bool
+from std_msgs.msg import Bool, Int32
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Any
 
+CAMERA_STREAM_URL = "http://127.0.0.1:8090/stream.mjpg"
+
 robot_state = {
-    "head_angles": [90, 90],
-    "arm_angles": [90, 90],
-    "claw_closed": False,
+    "tilt_angle": 90,
+    "led_on": False,
 }
 
 # -- MODELO DE COMANDOS --
 class RobotCommand(BaseModel):
-    action: str          # e.g., "forward", "armup", "set_speed"
+    action: str          # e.g., "move", "head", "set_speed"
     value: Optional[Any] = None
     
 # -- NODO ROS2 --
@@ -33,14 +37,11 @@ class WebBridgeNode(Node):
     def __init__(self):
         super().__init__('server_node')
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.arm_pub = self.create_publisher(Int32MultiArray, '/arm_cmds', 10)
-        self.head_pub = self.create_publisher(Int32MultiArray, '/head_cmds', 10)
-        self.claw_pub = self.create_publisher(Bool, '/claw_cmd', 10)
-        
-        # Estado actual de servos para enviar en bloque
-        self.head_angles = [90, 90]        # [Pan, Tilt]
-        self.arm_angles = [90, 90]     # [Hombro, Mano]
-        self.claw_closed = False
+        self.head_pub = self.create_publisher(Int32, '/head_cmds', 10)
+        self.led_pub = self.create_publisher(Bool, '/led_cmds', 10)
+
+        # Estado actual del servo de tilt
+        self.tilt_angle = 90
         self.get_logger().info('WebBridgeNode ROS2 iniciado correctamente.')
 
     def publish_twist(self, linear_x: float, angular_z: float):
@@ -48,24 +49,17 @@ class WebBridgeNode(Node):
         msg.linear.x = float(linear_x)
         msg.angular.z = float(angular_z)
         self.cmd_vel_pub.publish(msg)
-        
-    def publish_head(self, pan: int, tilt: int):
-        self.head_angles = [pan, tilt]
-        msg = Int32MultiArray()
-        msg.data = self.head_angles
+
+    def publish_head(self, tilt: int):
+        self.tilt_angle = tilt
+        msg = Int32()
+        msg.data = tilt
         self.head_pub.publish(msg)
-        
-    def publish_arm(self, hombro: int, mano: int):
-        self.arm_angles = [hombro, mano]
-        msg = Int32MultiArray()
-        msg.data = self.arm_angles
-        self.arm_pub.publish(msg)
-        
-    def publish_claw(self, close: bool):
-        self.claw_closed = close
+
+    def publish_led(self, enabled: bool):
         msg = Bool()
-        msg.data = self.claw_closed
-        self.claw_pub.publish(msg)
+        msg.data = bool(enabled)
+        self.led_pub.publish(msg)
 
 # -- INTERFAZ GRÁFICA (HTML + CSS + JS) --
 HTML_CONTENT = """
@@ -106,7 +100,13 @@ HTML_CONTENT = """
                 <p>🌡️ Temp: <span id="temp-val">--</span> °C - 🧠 CPU: <span id="cpu-val">--</span> % - 💾 RAM: <span id="ram-val">--</span> %</p>
             </div>
         </div>
-        
+
+        <!-- Tarjeta de Cámara -->
+        <div class="card" style="grid-column: 1 / -1;">
+            <h2>Cámara <span id="cam-fps" style="float: right; font-size: 0.8rem; font-weight: normal; color: #9ca3af;">-- fps</span></h2>
+            <img id="camera-feed" src="" alt="Video de la cámara" style="width: 100%; border-radius: 8px; background: #000;">
+        </div>
+
         <!-- Tarjeta de Locomoción -->
         <div class="card">
             <h2>Locomoción (W, A, S, D)</h2>
@@ -125,28 +125,17 @@ HTML_CONTENT = """
 
         <!-- Tarjeta de Servos -->
         <div class="card">
-            <h2>Cabeza y Brazo</h2>
-            <div class="slider-group">
-                <label><span>Cabeza - Pan (Izq/Der)</span><span id="val-pan">90°</span></label>
-                <input type="range" id="pan" min="0" max="180" value="90" oninput="updateServos()">
-            </div>
+            <h2>Cabeza (Cámara)</h2>
             <div class="slider-group">
                 <label><span>Cabeza - Tilt (Arr/Aba)</span><span id="val-tilt">90°</span></label>
-                <input type="range" id="tilt" min="0" max="180" value="90" oninput="updateServos()">
+                <input type="range" id="tilt" min="0" max="95" value="90" oninput="updateServos()">
             </div>
-            <hr style="border-color: #4b5563; margin: 15px 0;">
-            <div class="slider-group">
-                <label><span>Brazo - Hombro</span><span id="val-hombro">90°</span></label>
-                <input type="range" id="hombro" min="0" max="180" value="90" oninput="updateServos()">
-            </div>
-            <div class="slider-group">
-                <label><span>Brazo - Mano</span><span id="val-mano">90°</span></label>
-                <input type="range" id="mano" min="0" max="180" value="90" oninput="updateServos()">
-            </div>
-            <div class="slider-group">
-                <label><span>Brazo - Garra</span><span id="val-garra">90°</span></label>
-                <button class="btn" id="clawBtn" onclick="toggleClaw()">Garra: Abierta</button>
-            </div>
+        </div>
+
+        <!-- Tarjeta de Luces -->
+        <div class="card">
+            <h2>Luces (Policía)</h2>
+            <button class="btn" id="btn-led" style="width: 100%;" onclick="toggleLed()">🌑 Luces OFF</button>
         </div>
     </div>
 
@@ -154,13 +143,12 @@ HTML_CONTENT = """
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${wsProtocol}//${window.location.host}/ws/control`;
         let moveState = { x: 0, z: 0 };
-        let clawClosed = false;
         let ws;
         
         function connect() {
             ws = new WebSocket(wsUrl);
             const statusEl = document.getElementById('status');
-            
+
             ws.onopen = () => {
                 statusEl.textContent = 'Conectado al Robot';
                 statusEl.className = 'status connected';
@@ -171,7 +159,66 @@ HTML_CONTENT = """
                 setTimeout(connect, 2000);
             };
         }
-        
+
+        // Cámara por WebSocket con control de flujo: se pide un frame nuevo SOLO cuando ya
+        // se pintó el anterior. Si se aceptaran todos los frames que manda la cámara, los
+        // que no da tiempo a mostrar se acumularían en los búferes del túnel y el retraso
+        // crecería sin parar. Así el retraso queda fijo y el fps baja a lo que dé el enlace.
+        let camWs;
+        let shownFrameUrl = null;
+        let pendingFrameUrl = null;
+        let camWatchdog = null;
+        let fpsCount = 0;
+
+        function connectCamera() {
+            const camWsUrl = `${wsProtocol}//${window.location.host}/ws/camera`;
+            const img = document.getElementById('camera-feed');
+            camWs = new WebSocket(camWsUrl);
+            camWs.binaryType = 'blob';
+
+            const requestFrame = () => {
+                if (!camWs || camWs.readyState !== WebSocket.OPEN) return;
+                camWs.send('next');
+                // Si un frame se perdiera por el camino, no dejamos la imagen congelada.
+                clearTimeout(camWatchdog);
+                camWatchdog = setTimeout(requestFrame, 5000);
+            };
+
+            img.onload = () => {
+                if (shownFrameUrl) URL.revokeObjectURL(shownFrameUrl);
+                shownFrameUrl = pendingFrameUrl;
+                fpsCount++;
+                requestFrame();
+            };
+            img.onerror = () => setTimeout(requestFrame, 200);
+
+            camWs.onopen = () => requestFrame();
+            camWs.onmessage = (event) => {
+                clearTimeout(camWatchdog);
+                pendingFrameUrl = URL.createObjectURL(event.data);
+                img.src = pendingFrameUrl;
+            };
+            camWs.onclose = () => {
+                clearTimeout(camWatchdog);
+                document.getElementById('cam-fps').textContent = '-- fps';
+                setTimeout(connectCamera, 2000);
+            };
+        }
+
+        let ledOn = false;
+
+        function toggleLed() {
+            ledOn = !ledOn;
+            sendCmd('led', ledOn);
+            updateLedButton();
+        }
+
+        function updateLedButton() {
+            const btn = document.getElementById('btn-led');
+            btn.textContent = ledOn ? '🚨 Luces ON' : '🌑 Luces OFF';
+            btn.classList.toggle('active', ledOn);
+        }
+
         function setMove(x, z) {
             if (x !== null) moveState.x = x;
             if (z !== null) moveState.z = z;
@@ -189,25 +236,10 @@ HTML_CONTENT = """
             }
         }
         
-        function toggleClaw() {
-            clawClosed = !clawClosed;
-            sendCmd('claw', clawClosed);
-            document.getElementById('clawBtn').textContent = clawClosed ? 'Garra: Cerrada' : 'Garra: Abierta';
-        }
-
         function updateServos() {
-            const pan = parseInt(document.getElementById('pan').value);
             const tilt = parseInt(document.getElementById('tilt').value);
-            const hombro = parseInt(document.getElementById('hombro').value);
-            const mano = parseInt(document.getElementById('mano').value);
-
-            document.getElementById('val-pan').textContent = pan + '°';
             document.getElementById('val-tilt').textContent = tilt + '°';
-            document.getElementById('val-hombro').textContent = hombro + '°';
-            document.getElementById('val-mano').textContent = mano + '°';
-
-            sendCmd('head', [pan, tilt]);
-            sendCmd('arm', [hombro, mano]);
+            sendCmd('head', tilt);
         }
         
         function fetchTelemetry() {
@@ -250,25 +282,20 @@ HTML_CONTENT = """
             fetch('/api/state')
                 .then(response => response.json())
                 .then(data => {
-                    // 1. Actualizar el valor de los sliders (IDs corregidos)
-                    document.getElementById('pan').value = data.head_angles[0];
-                    document.getElementById('tilt').value = data.head_angles[1];
-                    document.getElementById('hombro').value = data.arm_angles[0];
-                    document.getElementById('mano').value = data.arm_angles[1];
-                    // 2. Actualizar las etiquetas de texto
-                    document.getElementById('val-pan').textContent = data.head_angles[0] + '°';
-                    document.getElementById('val-tilt').textContent = data.head_angles[1] + '°';
-                    document.getElementById('val-hombro').textContent = data.arm_angles[0] + '°';
-                    document.getElementById('val-mano').textContent = data.arm_angles[1] + '°';
-                    // 3. Sincronizar variable global y botón de la garra
-                    clawClosed = data.claw_closed;
-                    document.getElementById('clawBtn').textContent = clawClosed ? 'Garra: Cerrada' : 'Garra: Abierta';
-                    // 4. Log de estado cargado
+                    document.getElementById('tilt').value = data.tilt_angle;
+                    document.getElementById('val-tilt').textContent = data.tilt_angle + '°';
+                    ledOn = !!data.led_on;
+                    updateLedButton();
                     console.log('Robot state loaded:', data);
                 }).catch(err => console.error('Error fetching robot state:', err));
             setInterval(fetchTelemetry, 3000);
+            setInterval(() => {
+                document.getElementById('cam-fps').textContent = fpsCount + ' fps';
+                fpsCount = 0;
+            }, 1000);
         });
         connect();
+        connectCamera();
     </script>
 </body>
 </html>
@@ -281,12 +308,122 @@ ros_node: Optional[WebBridgeNode] = None
 @app.get("/", response_class=FileResponse)
 async def get_interface():
     """ Sirve el panel de control web desde la raíz del servidor """
-    ruta_html = "/home/luna/Desktop/robot_ws/src/robot_core/robot_core/index.html"
+    ruta_html = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
     return FileResponse(ruta_html, media_type='text/html')
 
 @app.get("/api/state")
 def get_robot_state():
     return JSONResponse(content=robot_state)
+
+@app.get("/stream.mjpg")
+async def camera_stream():
+    """ Reenvía el stream MJPEG de camera_node (solo escucha en localhost) hacia el cliente.
+    Sirve para pruebas directas en LAN; a través de un túnel (Cloudflare, etc.) usar /ws/camera,
+    ya que los proxies suelen bufferear streams HTTP multipart de larga duración. """
+    client = httpx.AsyncClient(timeout=None)
+    try:
+        upstream = await client.send(
+            client.build_request("GET", CAMERA_STREAM_URL), stream=True
+        )
+    except httpx.ConnectError:
+        await client.aclose()
+        return JSONResponse(status_code=503, content={"error": "Cámara no disponible"})
+
+    async def relay():
+        try:
+            async for chunk in upstream.aiter_raw():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        relay(),
+        media_type=upstream.headers.get("content-type", "multipart/x-mixed-replace"),
+    )
+
+async def _iter_mjpeg_frames(upstream):
+    """ Reensambla el stream multipart de camera_node en frames JPEG individuales. """
+    buffer = b""
+    async for chunk in upstream.aiter_raw():
+        buffer += chunk
+        while True:
+            header_end = buffer.find(b"\r\n\r\n")
+            if header_end == -1:
+                break
+            length = None
+            for line in buffer[:header_end].split(b"\r\n"):
+                if line.lower().startswith(b"content-length:"):
+                    length = int(line.split(b":", 1)[1].strip())
+                    break
+            if length is None:
+                # No era un encabezado de frame (p.ej. el boundary inicial); descartar y seguir
+                buffer = buffer[header_end + 4:]
+                continue
+            frame_start = header_end + 4
+            frame_end = frame_start + length
+            if len(buffer) < frame_end + 2:  # +2 por el \r\n final de cada parte
+                break
+            yield buffer[frame_start:frame_end]
+            buffer = buffer[frame_end + 2:]
+
+@app.websocket("/ws/camera")
+async def camera_ws(websocket: WebSocket):
+    """ Envía frames JPEG como mensajes binarios, con control de flujo extremo a extremo.
+
+    El cliente pide un frame ("next") solo cuando ya pintó el anterior, y aquí siempre se
+    manda el frame MÁS RECIENTE, descartando los intermedios. Sin este descarte la cámara
+    (~15 fps) produce mucho más de lo que aguanta el enlace y los frames sobrantes se
+    acumulan en los búferes del túnel y del navegador: el retraso crece sin límite con el
+    tiempo (5 s al principio, más de 60 s tras unos minutos). Con control de flujo el
+    retraso queda acotado a un frame, y el fps baja solo hasta lo que el enlace soporte. """
+    await websocket.accept()
+    client = httpx.AsyncClient(timeout=None)
+    try:
+        upstream = await client.send(
+            client.build_request("GET", CAMERA_STREAM_URL), stream=True
+        )
+    except httpx.ConnectError:
+        await websocket.close(code=1011)
+        await client.aclose()
+        return
+
+    latest = {"frame": None, "seq": 0, "eof": False}
+    frame_ready = asyncio.Event()
+
+    async def read_upstream():
+        """ Consume el stream a toda velocidad y conserva únicamente el último frame. """
+        try:
+            async for frame in _iter_mjpeg_frames(upstream):
+                latest["frame"] = frame
+                latest["seq"] += 1
+                frame_ready.set()
+        finally:
+            latest["eof"] = True
+            frame_ready.set()
+
+    reader = asyncio.create_task(read_upstream())
+    try:
+        sent_seq = 0
+        while True:
+            await websocket.receive_text()  # El cliente pide el siguiente frame
+            while latest["seq"] == sent_seq and not latest["eof"]:
+                frame_ready.clear()
+                await frame_ready.wait()
+            if latest["seq"] == sent_seq:  # Se acabó el stream de la cámara
+                break
+            sent_seq = latest["seq"]
+            await websocket.send_bytes(latest["frame"])
+    except WebSocketDisconnect:
+        pass
+    finally:
+        reader.cancel()
+        try:
+            await reader
+        except asyncio.CancelledError:
+            pass
+        await upstream.aclose()
+        await client.aclose()
 
 @app.get("/api/telemetry")
 def get_telemetry():
@@ -320,15 +457,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 linear_x = float(cmd.value.get("x", 0.0))
                 angular_z = float(cmd.value.get("z", 0.0))
                 ros_node.publish_twist(linear_x, angular_z)
-            elif cmd.action == "head" and isinstance(cmd.value, list) and len(cmd.value) == 2:
-                ros_node.publish_head(int(cmd.value[0]), int(cmd.value[1]))
-                robot_state["head_angles"] = [int(cmd.value[0]), int(cmd.value[1])]
-            elif cmd.action == "arm" and isinstance(cmd.value, list) and len(cmd.value) == 2:
-                ros_node.publish_arm(int(cmd.value[0]), int(cmd.value[1]))
-                robot_state["arm_angles"] = [int(cmd.value[0]), int(cmd.value[1])]
-            elif cmd.action == "claw" and isinstance(cmd.value, bool):
-                ros_node.publish_claw(cmd.value)
-                robot_state["claw_closed"] = cmd.value
+            elif cmd.action == "head" and isinstance(cmd.value, (int, float)):
+                tilt = int(cmd.value)
+                ros_node.publish_head(tilt)
+                robot_state["tilt_angle"] = tilt
+            elif cmd.action == "led":
+                enabled = bool(cmd.value)
+                ros_node.publish_led(enabled)
+                robot_state["led_on"] = enabled
     except WebSocketDisconnect:
         if ros_node:
             ros_node.publish_twist(0.0, 0.0)  # Freno de seguridad por desconexión
