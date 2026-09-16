@@ -9,6 +9,12 @@ Type=simple
 # permisos de GPIO/cámara ya vienen de los grupos dialout y video.
 User=luna
 ExecStart=/home/luna/Desktop/robot/ROS2_Robot/scripts/start_robot.sh
+# lgpio (backend de gpiozero, lo usa ultrasonic_node) crea su FIFO de notificación en el
+# directorio actual, y systemd arranca en "/", donde luna no puede escribir. Sin esto
+# gpiozero cae en silencio a RPi.GPIO, que muere con "Failed to add edge detection".
+# systemd crea /run/robot con dueño luna y lo borra al detener el servicio.
+RuntimeDirectory=robot
+Environment=LG_WD=/run/robot
 # Logs de los nodos al instante y sin códigos de color en journalctl
 Environment=PYTHONUNBUFFERED=1
 Environment=RCUTILS_COLORIZED_OUTPUT=0

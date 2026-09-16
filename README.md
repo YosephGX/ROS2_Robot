@@ -156,6 +156,13 @@ internet, **arranca igual**: el robot sigue siendo controlable por red local en
 `dialout` y `video`. Se detiene con `SIGINT`, igual que un Ctrl+C, para que
 `ros2 launch` pare los motores y apague los LEDs limpiamente.
 
+El servicio define `LG_WD=/run/robot`. `lgpio` (el backend de gpiozero que usa
+`ultrasonic_node`) crea un FIFO de notificación en el directorio actual, y systemd
+arranca los servicios en `/`, donde `luna` no puede escribir. Sin esa variable,
+gpiozero pasa sin avisar a `RPi.GPIO`, y el nodo muere con
+`RuntimeError: Failed to add edge detection`. A mano no pasa porque se lanza desde un
+directorio con permiso de escritura.
+
 Instalación (una sola vez; antes, detener cualquier `ros2 launch` manual):
 
 ```
