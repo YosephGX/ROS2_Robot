@@ -1,6 +1,8 @@
 [Unit]
 Description=Demonio de LEDs WS2812 del robot (GPIO12 via PWM+DMA, necesita /dev/mem)
-After=multi-user.target
+# Sin After=multi-user.target: este servicio forma parte de multi-user.target, y
+# robot.service se ordena después de él, así que eso formaría un ciclo y systemd
+# eliminaría el arranque de robot.service al encender.
 
 [Service]
 Type=simple
