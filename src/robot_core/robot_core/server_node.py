@@ -11,7 +11,7 @@ import psutil
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Int32
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from typing import Optional, Any
 
 robot_state = {
-    "head_angles": [90, 90],
+    "tilt_angle": 90,
 }
 
 # -- MODELO DE COMANDOS --
@@ -32,10 +32,10 @@ class WebBridgeNode(Node):
     def __init__(self):
         super().__init__('server_node')
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.head_pub = self.create_publisher(Int32MultiArray, '/head_cmds', 10)
+        self.head_pub = self.create_publisher(Int32, '/head_cmds', 10)
 
-        # Estado actual de servos para enviar en bloque
-        self.head_angles = [90, 90]        # [Pan, Tilt]
+        # Estado actual del servo de tilt
+        self.tilt_angle = 90
         self.get_logger().info('WebBridgeNode ROS2 iniciado correctamente.')
 
     def publish_twist(self, linear_x: float, angular_z: float):
@@ -43,11 +43,11 @@ class WebBridgeNode(Node):
         msg.linear.x = float(linear_x)
         msg.angular.z = float(angular_z)
         self.cmd_vel_pub.publish(msg)
-        
-    def publish_head(self, pan: int, tilt: int):
-        self.head_angles = [pan, tilt]
-        msg = Int32MultiArray()
-        msg.data = self.head_angles
+
+    def publish_head(self, tilt: int):
+        self.tilt_angle = tilt
+        msg = Int32()
+        msg.data = tilt
         self.head_pub.publish(msg)
 
 # -- INTERFAZ GRÁFICA (HTML + CSS + JS) --
@@ -116,12 +116,8 @@ HTML_CONTENT = """
         <div class="card">
             <h2>Cabeza (Cámara)</h2>
             <div class="slider-group">
-                <label><span>Cabeza - Pan (Izq/Der)</span><span id="val-pan">90°</span></label>
-                <input type="range" id="pan" min="0" max="180" value="90" oninput="updateServos()">
-            </div>
-            <div class="slider-group">
                 <label><span>Cabeza - Tilt (Arr/Aba)</span><span id="val-tilt">90°</span></label>
-                <input type="range" id="tilt" min="0" max="180" value="90" oninput="updateServos()">
+                <input type="range" id="tilt" min="0" max="95" value="90" oninput="updateServos()">
             </div>
         </div>
     </div>
@@ -165,13 +161,9 @@ HTML_CONTENT = """
         }
         
         function updateServos() {
-            const pan = parseInt(document.getElementById('pan').value);
             const tilt = parseInt(document.getElementById('tilt').value);
-
-            document.getElementById('val-pan').textContent = pan + '°';
             document.getElementById('val-tilt').textContent = tilt + '°';
-
-            sendCmd('head', [pan, tilt]);
+            sendCmd('head', tilt);
         }
         
         function fetchTelemetry() {
@@ -216,13 +208,8 @@ HTML_CONTENT = """
             fetch('/api/state')
                 .then(response => response.json())
                 .then(data => {
-                    // 1. Actualizar el valor de los sliders
-                    document.getElementById('pan').value = data.head_angles[0];
-                    document.getElementById('tilt').value = data.head_angles[1];
-                    // 2. Actualizar las etiquetas de texto
-                    document.getElementById('val-pan').textContent = data.head_angles[0] + '°';
-                    document.getElementById('val-tilt').textContent = data.head_angles[1] + '°';
-                    // 3. Log de estado cargado
+                    document.getElementById('tilt').value = data.tilt_angle;
+                    document.getElementById('val-tilt').textContent = data.tilt_angle + '°';
                     console.log('Robot state loaded:', data);
                 }).catch(err => console.error('Error fetching robot state:', err));
             setInterval(fetchTelemetry, 3000);
@@ -279,9 +266,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 linear_x = float(cmd.value.get("x", 0.0))
                 angular_z = float(cmd.value.get("z", 0.0))
                 ros_node.publish_twist(linear_x, angular_z)
-            elif cmd.action == "head" and isinstance(cmd.value, list) and len(cmd.value) == 2:
-                ros_node.publish_head(int(cmd.value[0]), int(cmd.value[1]))
-                robot_state["head_angles"] = [int(cmd.value[0]), int(cmd.value[1])]
+            elif cmd.action == "head" and isinstance(cmd.value, (int, float)):
+                tilt = int(cmd.value)
+                ros_node.publish_head(tilt)
+                robot_state["tilt_angle"] = tilt
     except WebSocketDisconnect:
         if ros_node:
             ros_node.publish_twist(0.0, 0.0)  # Freno de seguridad por desconexión

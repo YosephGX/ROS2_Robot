@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 # File name   : servo_node.py
-# Description : Nodo ROS2 de Control de Servos (Cabeza: pan/tilt)
+# Description : Nodo ROS2 de Control de Servos (Cabeza: tilt)
 # Author      : TheYoseph
 # Date        : 2026/08/01
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Int32
 
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import servo
 from board import SCL, SDA
 import busio
+
+TILT_CHANNEL = 11
+# Más allá de 95° el cable de la cámara se masca contra el chasis.
+TILT_MAX_ANGLE = 95
 
 class ServoNode(Node):
     def __init__(self):
@@ -21,49 +25,38 @@ class ServoNode(Node):
         self.pwm_servo = PCA9685(self.i2c, address=0x40)
         self.pwm_servo.frequency = 50
 
-        # Mapeo de canales y creación de objetos Servo
-        # Cabeza: Canal 11 (Tilt), Canal 14 (Pan)
-        self.servos = {}
-        for ch in [11, 14]:
-            self.servos[ch] = servo.Servo(
-                self.pwm_servo.channels[ch],
-                min_pulse=500,
-                max_pulse=2400,
-                actuation_range=180
-            )
+        # Cabeza: Canal 11 (Tilt) — único servo en esta variante (sin pan, sin brazo)
+        self.tilt_servo = servo.Servo(
+            self.pwm_servo.channels[TILT_CHANNEL],
+            min_pulse=500,
+            max_pulse=2400,
+            actuation_range=180
+        )
 
-        # Suscriptor ROS2: Para los comandos de la Cabeza (Cámara/Sensor Ultrasónico)
+        # Suscriptor ROS2: Para el comando de tilt de la Cabeza (Cámara)
         self.head_sub = self.create_subscription(
-            Int32MultiArray,
+            Int32,
             '/head_cmds',
             self.head_callback,
             10
         )
-        # 3. Posiciones Iniciales (Home)
+        # 3. Posición Inicial (Home)
         self.move_to_home()
         self.get_logger().info('Nodo ServoNode ROS2 iniciado correctamente.')
 
-    def set_servo_angle(self, ch, angle):
-        """Aplica límites de seguridad 0°-180° y mueve el servo."""
-        angle = max(0, min(180, angle))
-        if ch in self.servos:
-            self.servos[ch].angle = angle
+    def set_tilt_angle(self, angle):
+        """Aplica límites de seguridad 0°-95° y mueve el servo de tilt."""
+        angle = max(0, min(TILT_MAX_ANGLE, angle))
+        self.tilt_servo.angle = angle
 
     def head_callback(self, msg):
-        """
-        Espera un arreglo de 2 valores: [Pan/Izquierda-Derecha (14), Tilt/Arriba-Abajo (11)]
-        Ejemplo de mensaje: [90, 100]
-        """
-        if len(msg.data) >= 2:
-            self.set_servo_angle(14, msg.data[0])
-            self.set_servo_angle(11, msg.data[1])
-            self.get_logger().debug(f'Cabeza movida a: {msg.data[:2]}')
-            
+        """Espera el ángulo de tilt (0-95) como entero."""
+        self.set_tilt_angle(msg.data)
+        self.get_logger().debug(f'Cabeza (tilt) movida a: {msg.data}')
+
     def move_to_home(self):
-        """Posición inicial neutra de la cabeza (90 grados)."""
-        home_positions = {11: 90, 14: 90}
-        for ch, ang in home_positions.items():
-            self.set_servo_angle(ch, ang)
+        """Posición inicial neutra de la cabeza."""
+        self.set_tilt_angle(90)
             
     def destroy_node(self):
         # Limpieza física de motores al apagar el nodo
