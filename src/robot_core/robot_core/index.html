@@ -54,7 +54,7 @@
 
         <!-- Tarjeta de Servos -->
         <div class="card">
-            <h2>Cabeza y Brazo</h2>
+            <h2>Cabeza (Cámara)</h2>
             <div class="slider-group">
                 <label><span>Cabeza - Pan (Izq/Der)</span><span id="val-pan">90°</span></label>
                 <input type="range" id="pan" min="0" max="180" value="90" oninput="updateServos()">
@@ -63,19 +63,6 @@
                 <label><span>Cabeza - Tilt (Arr/Aba)</span><span id="val-tilt">90°</span></label>
                 <input type="range" id="tilt" min="0" max="180" value="90" oninput="updateServos()">
             </div>
-            <hr style="border-color: #4b5563; margin: 15px 0;">
-            <div class="slider-group">
-                <label><span>Brazo - Hombro</span><span id="val-hombro">90°</span></label>
-                <input type="range" id="hombro" min="0" max="180" value="90" oninput="updateServos()">
-            </div>
-            <div class="slider-group">
-                <label><span>Brazo - Mano</span><span id="val-mano">90°</span></label>
-                <input type="range" id="mano" min="0" max="180" value="90" oninput="updateServos()">
-            </div>
-            <div class="slider-group">
-                <label><span>Brazo - Garra</span><span id="val-garra">90°</span></label>
-                <button class="btn" id="clawBtn" onclick="toggleClaw()">Garra: Abierta</button>
-            </div>
         </div>
     </div>
 
@@ -83,7 +70,6 @@
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${wsProtocol}//${window.location.host}/ws/control`;
         let moveState = { x: 0, z: 0 };
-        let clawClosed = false;
         let ws;
         
         function connect() {
@@ -118,25 +104,14 @@
             }
         }
         
-        function toggleClaw() {
-            clawClosed = !clawClosed;
-            sendCmd('claw', clawClosed);
-            document.getElementById('clawBtn').textContent = clawClosed ? 'Garra: Cerrada' : 'Garra: Abierta';
-        }
-
         function updateServos() {
             const pan = parseInt(document.getElementById('pan').value);
             const tilt = parseInt(document.getElementById('tilt').value);
-            const hombro = parseInt(document.getElementById('hombro').value);
-            const mano = parseInt(document.getElementById('mano').value);
 
             document.getElementById('val-pan').textContent = pan + '°';
             document.getElementById('val-tilt').textContent = tilt + '°';
-            document.getElementById('val-hombro').textContent = hombro + '°';
-            document.getElementById('val-mano').textContent = mano + '°';
 
             sendCmd('head', [pan, tilt]);
-            sendCmd('arm', [hombro, mano]);
         }
         
         function fetchTelemetry() {
@@ -179,20 +154,13 @@
             fetch('/api/state')
                 .then(response => response.json())
                 .then(data => {
-                    // 1. Actualizar el valor de los sliders (IDs corregidos)
+                    // 1. Actualizar el valor de los sliders
                     document.getElementById('pan').value = data.head_angles[0];
                     document.getElementById('tilt').value = data.head_angles[1];
-                    document.getElementById('hombro').value = data.arm_angles[0];
-                    document.getElementById('mano').value = data.arm_angles[1];
                     // 2. Actualizar las etiquetas de texto
                     document.getElementById('val-pan').textContent = data.head_angles[0] + '°';
                     document.getElementById('val-tilt').textContent = data.head_angles[1] + '°';
-                    document.getElementById('val-hombro').textContent = data.arm_angles[0] + '°';
-                    document.getElementById('val-mano').textContent = data.arm_angles[1] + '°';
-                    // 3. Sincronizar variable global y botón de la garra
-                    clawClosed = data.claw_closed;
-                    document.getElementById('clawBtn').textContent = clawClosed ? 'Garra: Cerrada' : 'Garra: Abierta';
-                    // 4. Log de estado cargado
+                    // 3. Log de estado cargado
                     console.log('Robot state loaded:', data);
                 }).catch(err => console.error('Error fetching robot state:', err));
             setInterval(fetchTelemetry, 3000);

@@ -11,7 +11,7 @@ import psutil
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Int32MultiArray, Bool
+from std_msgs.msg import Int32MultiArray
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
@@ -20,13 +20,11 @@ from typing import Optional, Any
 
 robot_state = {
     "head_angles": [90, 90],
-    "arm_angles": [90, 90],
-    "claw_closed": False,
 }
 
 # -- MODELO DE COMANDOS --
 class RobotCommand(BaseModel):
-    action: str          # e.g., "forward", "armup", "set_speed"
+    action: str          # e.g., "move", "head", "set_speed"
     value: Optional[Any] = None
     
 # -- NODO ROS2 --
@@ -34,14 +32,10 @@ class WebBridgeNode(Node):
     def __init__(self):
         super().__init__('server_node')
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.arm_pub = self.create_publisher(Int32MultiArray, '/arm_cmds', 10)
         self.head_pub = self.create_publisher(Int32MultiArray, '/head_cmds', 10)
-        self.claw_pub = self.create_publisher(Bool, '/claw_cmd', 10)
-        
+
         # Estado actual de servos para enviar en bloque
         self.head_angles = [90, 90]        # [Pan, Tilt]
-        self.arm_angles = [90, 90]     # [Hombro, Mano]
-        self.claw_closed = False
         self.get_logger().info('WebBridgeNode ROS2 iniciado correctamente.')
 
     def publish_twist(self, linear_x: float, angular_z: float):
@@ -55,18 +49,6 @@ class WebBridgeNode(Node):
         msg = Int32MultiArray()
         msg.data = self.head_angles
         self.head_pub.publish(msg)
-        
-    def publish_arm(self, hombro: int, mano: int):
-        self.arm_angles = [hombro, mano]
-        msg = Int32MultiArray()
-        msg.data = self.arm_angles
-        self.arm_pub.publish(msg)
-        
-    def publish_claw(self, close: bool):
-        self.claw_closed = close
-        msg = Bool()
-        msg.data = self.claw_closed
-        self.claw_pub.publish(msg)
 
 # -- INTERFAZ GRÁFICA (HTML + CSS + JS) --
 HTML_CONTENT = """
@@ -126,7 +108,7 @@ HTML_CONTENT = """
 
         <!-- Tarjeta de Servos -->
         <div class="card">
-            <h2>Cabeza y Brazo</h2>
+            <h2>Cabeza (Cámara)</h2>
             <div class="slider-group">
                 <label><span>Cabeza - Pan (Izq/Der)</span><span id="val-pan">90°</span></label>
                 <input type="range" id="pan" min="0" max="180" value="90" oninput="updateServos()">
@@ -135,19 +117,6 @@ HTML_CONTENT = """
                 <label><span>Cabeza - Tilt (Arr/Aba)</span><span id="val-tilt">90°</span></label>
                 <input type="range" id="tilt" min="0" max="180" value="90" oninput="updateServos()">
             </div>
-            <hr style="border-color: #4b5563; margin: 15px 0;">
-            <div class="slider-group">
-                <label><span>Brazo - Hombro</span><span id="val-hombro">90°</span></label>
-                <input type="range" id="hombro" min="0" max="180" value="90" oninput="updateServos()">
-            </div>
-            <div class="slider-group">
-                <label><span>Brazo - Mano</span><span id="val-mano">90°</span></label>
-                <input type="range" id="mano" min="0" max="180" value="90" oninput="updateServos()">
-            </div>
-            <div class="slider-group">
-                <label><span>Brazo - Garra</span><span id="val-garra">90°</span></label>
-                <button class="btn" id="clawBtn" onclick="toggleClaw()">Garra: Abierta</button>
-            </div>
         </div>
     </div>
 
@@ -155,7 +124,6 @@ HTML_CONTENT = """
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${wsProtocol}//${window.location.host}/ws/control`;
         let moveState = { x: 0, z: 0 };
-        let clawClosed = false;
         let ws;
         
         function connect() {
@@ -190,25 +158,14 @@ HTML_CONTENT = """
             }
         }
         
-        function toggleClaw() {
-            clawClosed = !clawClosed;
-            sendCmd('claw', clawClosed);
-            document.getElementById('clawBtn').textContent = clawClosed ? 'Garra: Cerrada' : 'Garra: Abierta';
-        }
-
         function updateServos() {
             const pan = parseInt(document.getElementById('pan').value);
             const tilt = parseInt(document.getElementById('tilt').value);
-            const hombro = parseInt(document.getElementById('hombro').value);
-            const mano = parseInt(document.getElementById('mano').value);
 
             document.getElementById('val-pan').textContent = pan + '°';
             document.getElementById('val-tilt').textContent = tilt + '°';
-            document.getElementById('val-hombro').textContent = hombro + '°';
-            document.getElementById('val-mano').textContent = mano + '°';
 
             sendCmd('head', [pan, tilt]);
-            sendCmd('arm', [hombro, mano]);
         }
         
         function fetchTelemetry() {
@@ -251,20 +208,13 @@ HTML_CONTENT = """
             fetch('/api/state')
                 .then(response => response.json())
                 .then(data => {
-                    // 1. Actualizar el valor de los sliders (IDs corregidos)
+                    // 1. Actualizar el valor de los sliders
                     document.getElementById('pan').value = data.head_angles[0];
                     document.getElementById('tilt').value = data.head_angles[1];
-                    document.getElementById('hombro').value = data.arm_angles[0];
-                    document.getElementById('mano').value = data.arm_angles[1];
                     // 2. Actualizar las etiquetas de texto
                     document.getElementById('val-pan').textContent = data.head_angles[0] + '°';
                     document.getElementById('val-tilt').textContent = data.head_angles[1] + '°';
-                    document.getElementById('val-hombro').textContent = data.arm_angles[0] + '°';
-                    document.getElementById('val-mano').textContent = data.arm_angles[1] + '°';
-                    // 3. Sincronizar variable global y botón de la garra
-                    clawClosed = data.claw_closed;
-                    document.getElementById('clawBtn').textContent = clawClosed ? 'Garra: Cerrada' : 'Garra: Abierta';
-                    // 4. Log de estado cargado
+                    // 3. Log de estado cargado
                     console.log('Robot state loaded:', data);
                 }).catch(err => console.error('Error fetching robot state:', err));
             setInterval(fetchTelemetry, 3000);
@@ -324,12 +274,6 @@ async def websocket_endpoint(websocket: WebSocket):
             elif cmd.action == "head" and isinstance(cmd.value, list) and len(cmd.value) == 2:
                 ros_node.publish_head(int(cmd.value[0]), int(cmd.value[1]))
                 robot_state["head_angles"] = [int(cmd.value[0]), int(cmd.value[1])]
-            elif cmd.action == "arm" and isinstance(cmd.value, list) and len(cmd.value) == 2:
-                ros_node.publish_arm(int(cmd.value[0]), int(cmd.value[1]))
-                robot_state["arm_angles"] = [int(cmd.value[0]), int(cmd.value[1])]
-            elif cmd.action == "claw" and isinstance(cmd.value, bool):
-                ros_node.publish_claw(cmd.value)
-                robot_state["claw_closed"] = cmd.value
     except WebSocketDisconnect:
         if ros_node:
             ros_node.publish_twist(0.0, 0.0)  # Freno de seguridad por desconexión
