@@ -134,6 +134,48 @@ sudo ldconfig
 Se instala en `/usr/local` y coexiste sin conflicto con la versión vieja de Ubuntu
 en `/usr` (sonames distintos: `libcamera.so.0.7` vs `libcamera.so.0.2`).
 
+### 6. Arranque automático al encender (`robot.service`)
+
+Con esto el robot queda listo sin entrar por SSH: al encender espera a tener internet
+y lanza `robot_launch.py`. Tres servicios systemd arrancan solos:
+
+| Servicio | Qué hace | Usuario |
+|---|---|---|
+| `cloudflared.service` | Túnel de Cloudflare (lo instala `cloudflared service install`) | root |
+| `robot-led.service` | Demonio de LEDs, ver sección 4.1 | root |
+| `robot.service` | `scripts/start_robot.sh`: espera internet y hace `ros2 launch` | `luna` |
+
+`start_robot.sh` comprueba internet con `curl` contra Cloudflare (DNS + HTTPS, lo que
+necesita el túnel; el ping sin root está desactivado en Ubuntu). Si en 120 s no hay
+internet, **arranca igual**: el robot sigue siendo controlable por red local en
+`http://<IP>:5000`, solo falta el acceso por el túnel. Como systemd no lee
+`~/.bashrc`, el script carga a mano el entorno de ROS2 y del workspace.
+
+`robot.service` corre como `luna` y no como root, porque la cámara depende de
+`picamera2`/`libcamera` en `~/.local` y los permisos de hardware ya salen de los grupos
+`dialout` y `video`. Se detiene con `SIGINT`, igual que un Ctrl+C, para que
+`ros2 launch` pare los motores y apague los LEDs limpiamente.
+
+Instalación (una sola vez; antes, detener cualquier `ros2 launch` manual):
+
+```
+sudo install -m 644 scripts/robot.service /etc/systemd/system/robot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now robot.service
+```
+
+Uso diario:
+
+| Para... | Comando |
+|---|---|
+| Ver los logs en vivo | `journalctl -u robot -f` |
+| Aplicar cambios tras `colcon build` | `sudo systemctl restart robot` |
+| Lanzar a mano (depurar) | `sudo systemctl stop robot` y luego `ros2 launch robot_core robot_launch.py` |
+| Desactivar el arranque automático | `sudo systemctl disable --now robot` |
+
+Lanzar a mano con el servicio activo falla con puertos/GPIO ocupados (5000, 8090,
+`GPIO busy`): hay que detenerlo antes.
+
 ### Workarounds necesarios en Ubuntu (no aplican en Raspberry Pi OS)
 
 1. **Los bindings de Python de `libcamera` no quedan en `sys.path`**: el build de

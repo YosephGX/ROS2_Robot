@@ -1,0 +1,22 @@
+[Unit]
+Description=Robot ROS2 (espera internet y lanza robot_launch.py al encender)
+Wants=network-online.target robot-led.service
+After=network-online.target robot-led.service
+
+[Service]
+Type=simple
+# Usuario normal, no root: la cámara depende de picamera2/libcamera en ~/.local, y los
+# permisos de GPIO/cámara ya vienen de los grupos dialout y video.
+User=luna
+ExecStart=/home/luna/Desktop/robot/ROS2_Robot/scripts/start_robot.sh
+# Logs de los nodos al instante y sin códigos de color en journalctl
+Environment=PYTHONUNBUFFERED=1
+Environment=RCUTILS_COLORIZED_OUTPUT=0
+# Igual que Ctrl+C: ros2 launch detiene los nodos limpiamente (motores parados, LEDs apagados)
+KillSignal=SIGINT
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
