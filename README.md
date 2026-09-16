@@ -1,6 +1,49 @@
 # Robot ROS2 para Raspberry Pi
 El primer robot que he creado con la plataforma ROS2 sobre una Raspberry PI 5
 
+## Rama `pi4b`: variante para Raspberry Pi 4B
+
+Esta rama adapta el proyecto a un Raspberry Pi 4B con cámara y luces LED, sin brazo
+robótico (solo el servo de cabeza pan/tilt que sostiene la cámara).
+
+Diferencias respecto a `main` (Pi5):
+
+- **Cámara**: nodo nuevo `camera_node` (Picamera2/libcamera) que expone un stream
+  MJPEG propio en `http://<ip-del-robot>:8090/stream.mjpg`, integrado como tarjeta
+  de video en la interfaz web de control.
+- **LEDs**: mismo `led_node` (WS2812 vía SPI) que en `main`; en `main` probablemente
+  falla en silencio porque el SPI está deshabilitado — en esta rama debe habilitarse.
+- **Brazo/garra**: eliminados de `servo_node`, `server_node` y la interfaz web. Solo
+  quedan los canales PCA9685 11 (tilt) y 14 (pan) de la cabeza.
+
+### Habilitar SPI, I2C y cámara en `/boot/firmware/config.txt`
+
+En el bloque `[all]` inicial, descomentar SPI (I2C ya está activo):
+
+```
+dtparam=i2c_arm=on
+dtparam=spi=on
+```
+
+La línea `camera_auto_detect=1` (más abajo en el mismo archivo) ya habilita
+automáticamente la cámara CSI vía libcamera — no requiere cambios adicionales,
+pero confirma que el driver de cámara *legacy* esté deshabilitado
+(`raspi-config` → Interface Options → Legacy Camera → No).
+
+### Dependencias Python adicionales para esta rama
+
+Además de lo ya instalado para `main` (Adafruit Blinka, PCA9685, motor, gpiozero,
+FastAPI, etc.), se necesita:
+
+```
+picamera2
+adafruit-circuitpython-neopixel-spi
+adafruit-circuitpython-pixelbuf
+```
+
+`picamera2` normalmente ya viene preinstalado en Raspberry Pi OS (Bookworm) vía
+`sudo apt install python3-picamera2`.
+
 sudo nano /boot/firmware/config.txt
 ```
 [all]
