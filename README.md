@@ -15,7 +15,9 @@ Diferencias respecto a `main` (Pi5):
   proxy en `/stream.mjpg` sobre el mismo puerto 5000 que el resto de la interfaz web
   — así todo pasa por un único host/puerto, lo cual importa si expones el robot por
   un túnel (Cloudflare Tunnel, etc.): solo hay que mapear un hostname al puerto 5000.
-- **LEDs**: mismo `led_node` (WS2812 vía SPI) que en `main`.
+- **LEDs**: `led_node` se conmuta desde la web (tópico `/led_cmds`, `Bool`) y arranca
+  apagado. A diferencia de `main`, aquí la tira **no** va por SPI sino por GPIO12 —
+  ver la sección *LEDs WS2812* más abajo.
 - **Brazo/garra/pan**: eliminados de `servo_node`, `server_node` y la interfaz web.
   Solo queda el canal PCA9685 11 (tilt) de la cabeza.
 
@@ -30,20 +32,27 @@ Ubuntu 24.04 no trae ROS2 preinstalado. Seguir la guía oficial: habilitar el
 repositorio *Universe*, agregar el repo apt de ROS2, e instalar
 `ros-jazzy-ros-base` + `ros-dev-tools` (incluye `colcon`).
 
-### 2. Habilitar I2C y SPI en `/boot/firmware/config.txt`
+### 2. Ajustes en `/boot/firmware/config.txt`
 
 ```
 dtparam=i2c_arm=on
+dtparam=audio=off
 dtoverlay=spi0-0cs
 ```
 
-Se usa `dtoverlay=spi0-0cs` en vez de `dtparam=spi=on`: el overlay normal reserva
-también GPIO7/GPIO8 como chip-select (CE0/CE1), y GPIO8 es justo el pin ECHO del
-sensor ultrasónico (`ultrasonic_node.py`) — con `dtparam=spi=on` puro, `gpiozero`
-falla con `lgpio.error: 'GPIO busy'`. El overlay `spi0-0cs` deja libres CE0/CE1 y
-solo reserva SCLK/MOSI/MISO, que es todo lo que necesita `led_node` (NeoPixel por
-SPI no usa chip-select). La línea `camera_auto_detect=1` (más abajo en el mismo
-archivo) ya habilita la cámara CSI vía libcamera sin cambios adicionales.
+`dtparam=audio=off` es **obligatorio** para los LEDs: la tira va por GPIO12, que es
+PWM0, y el audio integrado (`snd_bcm2835`) reclama ese mismo periférico. Desactiva
+únicamente el jack de 3.5 mm; el audio por HDMI sigue funcionando.
+
+`dtoverlay=spi0-0cs` en vez de `dtparam=spi=on`: el overlay normal reserva también
+GPIO7/GPIO8 como chip-select (CE0/CE1), y GPIO8 es justo el pin ECHO del sensor
+ultrasónico (`ultrasonic_node.py`) — con `dtparam=spi=on` puro, `gpiozero` falla con
+`lgpio.error: 'GPIO busy'`. El overlay `spi0-0cs` deja libres CE0/CE1 y solo reserva
+SCLK/MOSI/MISO. (Desde que los LEDs dejaron de ir por SPI ya no hace falta ningún
+bus SPI; se deja el overlay porque es inofensivo y mantiene CE0/CE1 libres.)
+
+La línea `camera_auto_detect=1` (más abajo en el mismo archivo) ya habilita la cámara
+CSI vía libcamera sin cambios adicionales.
 
 ### 3. Dependencias del sistema (apt)
 
@@ -59,8 +68,42 @@ sudo apt install -y python3-pip python3-rpi.gpio python3-gpiozero \
 ```
 pip3 install --break-system-packages \
   adafruit-blinka adafruit-circuitpython-pca9685 adafruit-circuitpython-motor \
-  adafruit-circuitpython-neopixel-spi adafruit-circuitpython-pixelbuf picamera2
+  picamera2
+sudo pip3 install --break-system-packages rpi_ws281x
 ```
+
+`rpi_ws281x` va instalado con `sudo` a propósito: el demonio de LEDs corre como root
+y necesita verlo en `/usr/local/lib/python3.12/dist-packages`, no en `~/.local`.
+
+### 4.1 LEDs WS2812 (GPIO12) y `robot-led.service`
+
+El HAT cablea la línea de datos de la tira a **GPIO12**, no al MOSI del SPI (así está
+en el repo de hardware de referencia, `BLONWINER_2in1_Robot_V2/web/LED.py`:
+`LED_PIN = 12`, con la alternativa `LED_PIN = 10` comentada). Por eso `neopixel_spi`
+no sirve aquí: transmite correctamente por GPIO10 pero ahí no hay nada conectado, y
+no da ningún error — los LEDs simplemente nunca encienden.
+
+Generar la señal en GPIO12 exige PWM + DMA (`rpi_ws281x`), que mapea `/dev/mem` y por
+tanto necesita root (`CAP_SYS_RAWIO`). Para no correr ROS2 entero como root — lo que
+rompería la memoria compartida de DDS entre usuarios y dejaría procesos huérfanos,
+porque `ros2 launch` corre sin privilegios y no puede matar un proceso root — el
+privilegio se aísla en `scripts/led_daemon.py`:
+
+- `scripts/led_daemon.py` (root, servicio systemd) es lo único que toca el hardware.
+  Escucha en el socket UNIX `/run/robot-led.sock`, grupo `dialout`, y cada datagrama
+  es un frame completo de 3 bytes (R, G, B) por pixel.
+- `led_node.py` (usuario normal, dentro del launch) decide la animación y manda los
+  frames por ese socket.
+
+Instalación (una sola vez):
+
+```
+sudo install -m 644 scripts/robot-led.service /etc/systemd/system/robot-led.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now robot-led.service
+```
+
+Comprobar: `systemctl status robot-led` y `journalctl -u robot-led -n 20`.
 
 ### 5. Compilar `libcamera` desde código fuente
 

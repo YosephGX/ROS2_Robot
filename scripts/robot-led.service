@@ -1,0 +1,12 @@
+[Unit]
+Description=Demonio de LEDs WS2812 del robot (GPIO12 via PWM+DMA, necesita /dev/mem)
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/luna/Desktop/robot/ROS2_Robot/scripts/led_daemon.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
