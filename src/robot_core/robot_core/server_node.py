@@ -4,6 +4,7 @@
 # Author      : TheYoseph
 # Date        : 2026/08/01
 
+import os
 import threading
 import uvicorn
 import psutil
@@ -281,7 +282,7 @@ ros_node: Optional[WebBridgeNode] = None
 @app.get("/", response_class=FileResponse)
 async def get_interface():
     """ Sirve el panel de control web desde la raíz del servidor """
-    ruta_html = "/home/luna/Desktop/robot_ws/src/robot_core/robot_core/index.html"
+    ruta_html = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
     return FileResponse(ruta_html, media_type='text/html')
 
 @app.get("/api/state")
